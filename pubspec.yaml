@@ -1,0 +1,23 @@
+name: gisila_queue
+description: >-
+  A Celery-like distributed task queue for Dart: register named tasks,
+  enqueue them from anywhere with .delay()/.applyAsync(), and process them
+  with worker pools backed by a pluggable broker (Redis or in-memory) and
+  result backend. Supports retries with backoff, ETA/countdown scheduling,
+  named queues, and a beat scheduler for periodic tasks.
+version: 0.1.0
+repository: https://github.com/gumisofts/gisila
+
+environment:
+  sdk: ^3.3.0
+
+dependencies:
+  meta: ^1.11.0
+  collection: ^1.18.0
+  uuid: ^4.4.0
+  # The same Redis client the rest of the Gisila stack uses.
+  redis: ^4.0.0
+
+dev_dependencies:
+  lints: ">=3.0.0 <7.0.0"
+  test: ^1.24.0

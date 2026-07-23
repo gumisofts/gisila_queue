@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # A real Redis instance so the `redis`-tagged integration tests (at-least-
+    # once delivery, reconnect-on-error, Beat leader lock, chord barrier,
+    # control-channel pub/sub — see test/redis_integration_test.dart) run in
+    # CI instead of self-skipping.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Analyze
+        run: dart analyze --fatal-infos
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Run tests (including Redis integration tests)
+        run: dart test
+        env:
+          GISILA_TEST_REDIS_HOST: localhost
+          GISILA_TEST_REDIS_PORT: 6379
