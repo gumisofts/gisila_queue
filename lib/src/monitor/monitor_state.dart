@@ -78,7 +78,12 @@ class WorkerInfo {
   bool isAlive(DateTime now, Duration timeout) =>
       online && now.difference(lastHeartbeat) <= timeout;
 
-  Map<String, Object?> toJson({DateTime? now, Duration? timeout}) => {
+  Map<String, Object?> toJson({
+    DateTime? now,
+    Duration? timeout,
+    List<String>? activeTaskIds,
+  }) =>
+      {
         'id': id,
         if (hostname != null) 'hostname': hostname,
         'queues': queues,
@@ -90,6 +95,7 @@ class WorkerInfo {
         'alive':
             (now != null && timeout != null) ? isAlive(now, timeout) : online,
         'last_heartbeat': lastHeartbeat.toUtc().toIso8601String(),
+        if (activeTaskIds != null) 'active_task_ids': activeTaskIds,
       };
 }
 
@@ -172,11 +178,13 @@ class MonitorState {
 
       switch (event.type) {
         case QueueEventType.taskSent:
-          sent++;
+          // Idempotent: Rose may apply locally and also receive its own emit
+          // back through the event source.
+          if (t.sentAt == null) sent++;
           t.state = TaskState.pending;
           t.sentAt = ts;
-          t.args = f['args'];
-          t.kwargs = f['kwargs'];
+          t.args = f['args'] ?? t.args;
+          t.kwargs = f['kwargs'] ?? t.kwargs;
           if (f['eta'] is String) t.state = TaskState.scheduled;
           break;
         case QueueEventType.taskReceived:
@@ -250,6 +258,7 @@ class MonitorState {
     TaskState? state,
     String? name,
     String? queue,
+    String? worker,
     int limit = 200,
     int offset = 0,
   }) {
@@ -257,13 +266,36 @@ class MonitorState {
         .where((t) => state == null || t.state == state)
         .where((t) => name == null || t.name == name)
         .where((t) => queue == null || t.queue == queue)
+        .where((t) => worker == null || t.workerId == worker)
         .toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     if (offset >= all.length) return const [];
     return all.sublist(offset, (offset + limit).clamp(0, all.length));
   }
 
+  /// Tasks associated with [workerId], most-recently-updated first.
+  List<TaskInfo> tasksForWorker(String workerId, {TaskState? state}) => tasks(
+        worker: workerId,
+        state: state,
+        limit: maxTasks,
+      );
+
+  /// Ids of tasks currently [TaskState.started] (or just [TaskState.pending]
+  /// after [TaskInfo.receivedAt]) on [workerId].
+  List<String> activeTaskIdsFor(String workerId) {
+    final ids = <String>[];
+    for (final t in _tasks.values) {
+      if (t.workerId != workerId) continue;
+      final inFlight = t.state == TaskState.started ||
+          (t.state == TaskState.pending && t.receivedAt != null);
+      if (inFlight) ids.add(t.id);
+    }
+    return ids;
+  }
+
   TaskInfo? taskById(String id) => _tasks[id];
+
+  WorkerInfo? workerById(String id) => _workers[id];
 
   int get taskCount => _tasks.length;
 
@@ -281,7 +313,10 @@ class MonitorState {
   }
 
   /// Dashboard summary payload.
-  Map<String, Object?> stats(DateTime now) {
+  Map<String, Object?> stats(
+    DateTime now, {
+    Map<String, Object?>? capabilities,
+  }) {
     final aliveWorkers =
         _workers.values.where((w) => w.isAlive(now, workerTimeout)).length;
     return {
@@ -301,6 +336,7 @@ class MonitorState {
       'tasks_tracked': _tasks.length,
       'queues': Map.of(queueLengths),
       'task_types': taskTypeStats(),
+      if (capabilities != null) 'capabilities': capabilities,
     };
   }
 

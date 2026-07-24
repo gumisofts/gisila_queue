@@ -16,7 +16,9 @@ import 'package:gisila_queue/gisila_rose.dart';
 ///                         (default: gq)
 ///   `--host=HOST`         HTTP bind host (default: 0.0.0.0)
 ///   `--port=PORT`         HTTP bind port (default: 5555)
-///   `--no-queues`         Don't open a broker connection for queue depths
+///   `--basic-auth=U:P`    Require HTTP Basic Auth (Flower-style)
+///   `--no-queues`         Don't open a broker (no depths / fire / retry)
+///   `--no-control`        Don't open a control channel (no revoke/pause)
 Future<void> main(List<String> argv) async {
   final args = _parse(argv);
   if (args.containsKey('help') || args.containsKey('h')) {
@@ -30,19 +32,36 @@ Future<void> main(List<String> argv) async {
   final host = args['host'] ?? '0.0.0.0';
   final port = int.tryParse(args['port'] ?? '') ?? 5555;
   final withQueues = !args.containsKey('no-queues');
+  final withControl = !args.containsKey('no-control');
+  final basicAuth = args['basic-auth'];
+
+  if (basicAuth != null && !basicAuth.contains(':')) {
+    stderr.writeln('error: --basic-auth must be user:password');
+    exitCode = 64;
+    return;
+  }
 
   final rose = GisilaRose(
     source: RedisEventSource(host: redisHost, port: redisPort, prefix: prefix),
     broker: withQueues
         ? RedisBroker(host: redisHost, port: redisPort, prefix: prefix)
         : null,
+    control: withControl
+        ? RedisControlChannel(host: redisHost, port: redisPort, prefix: prefix)
+        : null,
+    events: RedisEventSink(host: redisHost, port: redisPort, prefix: prefix),
+    backend: withQueues
+        ? RedisResultBackend(host: redisHost, port: redisPort, prefix: prefix)
+        : null,
+    basicAuth: basicAuth,
     host: host,
     port: port,
   );
 
   await rose.start();
+  final authNote = basicAuth != null ? ', basic-auth on' : '';
   stdout.writeln('GisilaRose → http://$host:$port  '
-      '(redis $redisHost:$redisPort, prefix "$prefix")');
+      '(redis $redisHost:$redisPort, prefix "$prefix"$authNote)');
 
   // Shut down cleanly on Ctrl-C / SIGTERM.
   Future<void> shutdown(ProcessSignal _) async {
@@ -63,7 +82,8 @@ const _usage = '''
 gisila_queue:rose — observability dashboard for gisila_queue
 
   dart run gisila_queue:rose [--redis-host=H] [--redis-port=P]
-      [--prefix=gq] [--host=0.0.0.0] [--port=5555] [--no-queues]
+      [--prefix=gq] [--host=0.0.0.0] [--port=5555]
+      [--basic-auth=user:pass] [--no-queues] [--no-control]
 ''';
 
 Map<String, String> _parse(List<String> argv) {

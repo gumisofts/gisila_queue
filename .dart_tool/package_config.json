@@ -62,6 +62,12 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "dart_amqp",
+      "rootUri": "file:///home/murad/.pub-cache/hosted/pub.dev/dart_amqp-0.2.5",
+      "packageUri": "lib/",
+      "languageVersion": "2.12"
+    },
+    {
       "name": "file",
       "rootUri": "file:///home/murad/.pub-cache/hosted/pub.dev/file-7.0.1",
       "packageUri": "lib/",

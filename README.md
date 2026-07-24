@@ -2,8 +2,8 @@
 
 A **Celery-like distributed task queue for Dart**. Define named tasks once,
 enqueue them from anywhere with `.delay()` / `.applyAsync()`, and process them
-with worker pools backed by a pluggable broker (Redis or in-memory) and an
-optional result backend.
+with worker pools backed by a pluggable broker (Redis, RabbitMQ, or in-memory)
+and an optional result backend.
 
 Part of the [Gisila](https://github.com/gumisofts/gisila) ecosystem — it
 generalises the ad-hoc `BLPOP` worker loop used in `gisila-panel` into a
@@ -14,11 +14,12 @@ reusable library.
 - **Named task registry** with typed producer handles (`TaskRef<T>`).
 - **`.delay()` / `.applyAsync()`** producer API, including `countdown` / `eta`
   scheduling, `expires` deadlines, and per-call queue routing.
-- **Pluggable broker** — `RedisBroker` for multi-process/multi-host clusters,
-  `InMemoryBroker` for tests and single-process apps. The Redis broker gives
-  **at-least-once delivery** (an unacked ledger + visibility-timeout reaper
-  redeliver a crashed worker's in-flight messages) and **reconnects
-  automatically** after a Redis restart.
+- **Pluggable broker** — `RedisBroker` or `RabbitBroker` for multi-process /
+  multi-host clusters, `InMemoryBroker` for tests and single-process apps.
+  Both distributed brokers give **at-least-once delivery** (Redis via an
+  unacked ledger + visibility-timeout reaper; RabbitMQ via manual AMQP ack /
+  requeue on crash). ETA/countdown on RabbitMQ uses per-message TTL + a
+  dead-letter exchange (no plugin required).
 - **Pluggable result backend** — `RedisResultBackend` (TTL'd) or
   `InMemoryResultBackend` (bounded via `maxEntries`/`ttl`); omit it entirely
   for fire-and-forget.
@@ -58,7 +59,7 @@ reusable library.
 | `Celery()` app                | `GisilaQueue`                                  |
 | `@app.task`                   | `app.task<T>(name, handler)`                   |
 | `.delay()` / `.apply_async`   | `ref.delay()` / `ref.applyAsync()`             |
-| broker (Redis/RabbitMQ)       | `Broker` (`RedisBroker`, in-memory)            |
+| broker (Redis/RabbitMQ)       | `Broker` (`RedisBroker`, `RabbitBroker`, in-memory) |
 | result backend                | `ResultBackend`                                |
 | `AsyncResult`                 | `AsyncResult`                                  |
 | `celery worker`               | `app.worker().run()` (or `WorkerCli`)          |
@@ -124,9 +125,18 @@ Future<void> main() async {
 ```
 
 Run several worker processes (or containers) to scale out; each one pulls from
-the shared Redis queues. `concurrency` controls how many tasks a single
+the shared broker queues. `concurrency` controls how many tasks a single
 process runs at once — ideal for IO-bound work. For CPU-bound work, prefer
 more processes over higher `concurrency`.
+
+Swap in RabbitMQ the same way:
+
+```dart
+final app = GisilaQueue(
+  broker: RabbitBroker(host: 'localhost', port: 5672),
+  backend: RedisResultBackend(host: 'localhost', port: 6379), // optional
+);
+```
 
 ## Retries
 
@@ -280,8 +290,9 @@ single instance, and a restart forgets `lastRun` for every entry.
 ## Observability (GisilaRose)
 
 Like Flower for Celery, **GisilaRose** is an *optional* dashboard that shows
-live tasks, worker status, queue depths, and per-task-type stats. It's driven
-by a lightweight event stream that producers and workers emit — which is
+live tasks, worker status, queue depths, and per-task-type stats — plus
+Flower-style actions (fire, retry, revoke, pause/resume). It's driven by a
+lightweight event stream that producers and workers emit — which is
 **off by default**: a `GisilaQueue` with no `events:` sink pays nothing.
 
 Turn it on by giving the app an event sink. Use `RedisEventSink` so a separate
@@ -293,6 +304,7 @@ final app = GisilaQueue(
   broker: RedisBroker(host: 'localhost'),
   backend: RedisResultBackend(host: 'localhost'),
   events: RedisEventSink(host: 'localhost'),   // ← opt in
+  controlChannel: RedisControlChannel(host: 'localhost'),
 );
 ```
 
@@ -300,9 +312,18 @@ Then run the dashboard. The simplest way is the bundled binary (the analogue
 of `celery flower`):
 
 ```sh
-dart run gisila_queue:rose --redis-host=localhost --port=5555
+dart run gisila_queue:rose --redis-host=localhost --port=5555 \
+  --basic-auth=admin:secret
 # → GisilaRose on http://localhost:5555
 ```
+
+Flags:
+
+| Flag | Effect |
+| ---- | ------ |
+| `--basic-auth=user:pass` | HTTP Basic Auth on every route (optional; open when omitted) |
+| `--no-queues` | No broker — disables queue depths, fire, and retry |
+| `--no-control` | No control channel — disables revoke / pause / resume |
 
 …or embed it in your own process:
 
@@ -311,22 +332,36 @@ import 'package:gisila_queue/gisila_rose.dart';
 
 final rose = GisilaRose(
   source: RedisEventSource(host: 'localhost'),
-  broker: RedisBroker(host: 'localhost'),  // optional: enables queue-depth panel
+  broker: RedisBroker(host: 'localhost'),
+  control: RedisControlChannel(host: 'localhost'),
+  events: RedisEventSink(host: 'localhost'),
+  backend: RedisResultBackend(host: 'localhost'),
+  basicAuth: 'admin:secret', // optional
   port: 5555,
 );
 await rose.start();
 ```
 
-It serves a self-contained web UI at `/` plus a JSON API:
+It serves a self-contained light-theme web UI at `/` (timestamps, task detail
+drawer, per-worker drill-down, fire/retry/revoke/pause actions) plus a JSON API:
 
-| Endpoint              | Returns                                          |
-| --------------------- | ------------------------------------------------ |
-| `GET /api/stats`      | totals, worker/queue rollups, per-task-type stats|
-| `GET /api/workers`    | each worker's status + counters                  |
-| `GET /api/tasks`      | recent tasks (`?state=&name=&queue=&limit=&offset=`) |
-| `GET /api/tasks/<id>` | one task's full detail                           |
-| `GET /api/queues`     | broker depth per queue                           |
-| `GET /api/events`     | Server-Sent Events firehose (live tail)          |
+| Endpoint | Returns / action |
+| -------- | ---------------- |
+| `GET /api/stats` | totals, worker/queue rollups, capabilities |
+| `GET /api/workers` | each worker's status, counters, `active_task_ids` |
+| `GET /api/workers/<id>` | one worker + its active/recent tasks |
+| `GET /api/tasks` | recent tasks (`?state=&name=&queue=&worker=&limit=&offset=`) |
+| `GET /api/tasks/<id>` | one task's full detail (incl. timestamps, args, error) |
+| `POST /api/tasks/fire` | enqueue `{name, args?, kwargs?, queue?}` |
+| `POST /api/tasks/<id>/retry` | re-fire same name/args/kwargs/queue with a **new** task id |
+| `POST /api/tasks/<id>/revoke` | broadcast revoke on the control channel |
+| `POST /api/queues/<name>/pause` | pause consumption of a queue |
+| `POST /api/queues/<name>/resume` | resume consumption of a queue |
+| `GET /api/queues` | broker depth per queue |
+| `GET /api/events` | Server-Sent Events firehose (live tail) |
+
+Mutating endpoints return `503` when the required broker/control dependency
+was not configured. Retry always creates a new task id (Flower-style re-apply).
 
 For a **single-isolate** app or tests, skip Redis: share one
 `InMemoryEventBus` as both the app's `events:` sink and the rose's `source:`.
@@ -349,16 +384,41 @@ final app = GisilaQueue(
 
 See [`example/main.dart`](example/main.dart) for a complete self-contained run.
 
+## Benchmarks
+
+[`benchmark/throughput_bench.dart`](benchmark/throughput_bench.dart) floods a
+worker with many lightweight tasks and reports enqueue rate, drain rate,
+end-to-end throughput, and latency percentiles.
+
+```sh
+# In-memory (no Redis) — default 10k tasks, concurrency 8
+dart run benchmark/throughput_bench.dart
+
+# Heavier load / higher concurrency
+dart run benchmark/throughput_bench.dart --tasks=50000 --concurrency=16
+
+# Sweep concurrency 1..32 and print a summary table
+dart run benchmark/throughput_bench.dart --sweep --tasks=20000
+
+# Against a real Redis broker
+dart run benchmark/throughput_bench.dart --broker=redis --tasks=10000
+
+# Against a real RabbitMQ broker
+dart run benchmark/throughput_bench.dart --broker=rabbitmq --tasks=10000
+
+# Simulate per-task work + store results
+dart run benchmark/throughput_bench.dart --work-us=500 --with-results
+```
+
 ## Architecture
 
 ```
 producer ──ref.delay()──▶ GisilaQueue.send ──▶ Broker.enqueue
-                                                   │  (Redis list / ZSET for ETA)
+                                                   │  Redis: list / ZSET for ETA
+                                                   │  RabbitMQ: queue / TTL+DLX
                                                    ▼
-                              Worker.reserve ◀── Broker (BRPOPLPUSH into an
-                                   │              unacked ledger + ETA promotion;
-                                   │              a reaper redelivers anything past
-                                   │              its visibility timeout)
+                              Worker.reserve ◀── Broker (ack after handle;
+                                   │              unacked → redeliver on crash)
                                    ▼
                               task handler ──▶ ResultBackend.store(state, result)
                                    ▲                                    │

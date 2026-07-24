@@ -2,7 +2,7 @@
 ///
 /// Define named tasks, enqueue them from anywhere with `.delay()` /
 /// `.applyAsync()`, and process them with worker pools backed by a pluggable
-/// [Broker] (Redis or in-memory) and optional [ResultBackend]. Supports
+/// [Broker] (Redis, RabbitMQ, or in-memory) and optional [ResultBackend]. Supports
 /// retries with exponential backoff, ETA / countdown scheduling, named
 /// queues, and a [Beat] scheduler for periodic tasks.
 ///
@@ -35,6 +35,7 @@ export 'src/beat/coordination.dart';
 export 'src/beat/schedule.dart';
 export 'src/broker/broker.dart';
 export 'src/broker/in_memory_broker.dart';
+export 'src/broker/rabbit_broker.dart';
 export 'src/broker/redis_broker.dart';
 export 'src/canvas.dart';
 export 'src/codec.dart';

@@ -11,8 +11,8 @@ import '../message.dart';
 /// * **Acknowledge** a reserved message once it has been fully handled,
 ///   enabling at-least-once delivery on backends that support it.
 ///
-/// Implementations: [InMemoryBroker] (single-process / tests) and
-/// `RedisBroker` (distributed).
+/// Implementations: [InMemoryBroker] (single-process / tests),
+/// `RedisBroker` (distributed), and `RabbitBroker` (AMQP / RabbitMQ).
 abstract class Broker {
   /// Places [message] on its queue. If the message carries a future ETA it
   /// is held until due, then promoted automatically by [reserve].

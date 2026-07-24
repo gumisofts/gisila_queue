@@ -9,10 +9,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    # A real Redis instance so the `redis`-tagged integration tests (at-least-
-    # once delivery, reconnect-on-error, Beat leader lock, chord barrier,
-    # control-channel pub/sub — see test/redis_integration_test.dart) run in
-    # CI instead of self-skipping.
+    # Real Redis + RabbitMQ so tagged integration tests run in CI instead of
+    # self-skipping (see test/redis_integration_test.dart and
+    # test/rabbitmq_integration_test.dart).
     services:
       redis:
         image: redis:7-alpine
@@ -22,6 +21,15 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 3s
+          --health-retries 10
+      rabbitmq:
+        image: rabbitmq:3-alpine
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
           --health-retries 10
 
     steps:
@@ -40,8 +48,10 @@ jobs:
       - name: Verify formatting
         run: dart format --output=none --set-exit-if-changed .
 
-      - name: Run tests (including Redis integration tests)
+      - name: Run tests (including Redis and RabbitMQ integration tests)
         run: dart test
         env:
           GISILA_TEST_REDIS_HOST: localhost
           GISILA_TEST_REDIS_PORT: 6379
+          GISILA_TEST_RABBITMQ_HOST: localhost
+          GISILA_TEST_RABBITMQ_PORT: 5672

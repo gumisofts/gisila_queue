@@ -8,6 +8,9 @@ description: >-
 version: 0.1.0
 repository: https://github.com/gumisofts/gisila
 
+executables:
+  rose: rose
+
 environment:
   sdk: ^3.3.0
 
@@ -17,6 +20,7 @@ dependencies:
   uuid: ^4.4.0
   # The same Redis client the rest of the Gisila stack uses.
   redis: ^4.0.0
+  dart_amqp: ^0.2.5
 
 dev_dependencies:
   lints: ">=3.0.0 <7.0.0"

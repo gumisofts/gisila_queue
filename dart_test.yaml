@@ -5,3 +5,9 @@ tags:
       GISILA_TEST_REDIS_HOST:GISILA_TEST_REDIS_PORT (defaults to
       localhost:6379). Exclude with `dart test --exclude-tags redis` in
       environments without Redis.
+  rabbitmq:
+    description: >-
+      Requires a real RabbitMQ instance reachable at
+      GISILA_TEST_RABBITMQ_HOST:GISILA_TEST_RABBITMQ_PORT (defaults to
+      localhost:5672). Exclude with `dart test --exclude-tags rabbitmq` in
+      environments without RabbitMQ.

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`RabbitBroker`** — RabbitMQ (AMQP) broker via `dart_amqp`. Durable queues,
+  manual ack for at-least-once delivery, and ETA/countdown via per-message TTL
+  + dead-letter exchange (stock RabbitMQ, no delayed-message plugin). Tagged
+  integration tests (`rabbitmq`) and `--broker=rabbitmq` on the throughput
+  benchmark.
 - **Observability layer (opt-in).** Producers and workers now emit lifecycle
   `QueueEvent`s to an optional `QueueEventSink` on `GisilaQueue` (defaults to a
   zero-overhead `NoopEventSink`):
@@ -12,6 +17,10 @@
   for live tasks, workers, and queue depths, with a JSON API and SSE live tail.
   Run standalone via `dart run gisila_queue:rose`. The analogue of Celery's
   Flower.
+  - Light-theme UI with timestamps, task detail drawer, and per-worker drill-down.
+  - Flower-style actions: fire, retry (new id), revoke, queue pause/resume.
+  - Optional HTTP Basic Auth (`--basic-auth=user:pass`).
+  - `GET /api/workers/<id>`, `worker=` task filter, `active_task_ids` on workers.
 
 ## 0.1.0
 
