@@ -418,13 +418,22 @@ class Worker {
   /// Dart cannot forcibly preempt a running computation, so a time limit
   /// only abandons the *wait* — it frees this slot for other work, but the
   /// handler's code keeps running in the background. Any result or error it
-  /// produces after that point is discarded (via the attached no-op
-  /// [Future.catchError]) so it can't surface as an unhandled async error.
+  /// produces after that point is discarded (via an attached no-op
+  /// listener) so it can't surface as an unhandled async error.
+  ///
+  /// Important: do not use [Future.catchError] with `=> null` here. Handlers
+  /// often return non-nullable types (`Future<bool>`), and a null error
+  /// replacement violates that type and crashes the worker.
   Future<Object?> _runHandler(Task task, TaskContext ctx) {
     final limit = task.timeLimit;
     final future = task.handler(ctx);
     if (limit == null) return future;
-    unawaited(future.catchError((Object _, StackTrace __) => null));
+    unawaited(
+      future.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace __) {},
+      ),
+    );
     return future.timeout(limit, onTimeout: () {
       throw TaskTimeLimitExceededException(ctx.id, limit);
     });
