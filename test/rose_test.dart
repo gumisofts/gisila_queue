@@ -411,4 +411,89 @@ void main() {
       expect(pause.status, 503);
     });
   });
+
+  group('Q-07 exposure', () {
+    test('refuses write actions on a public address without auth', () async {
+      final rose = GisilaRose(
+        source: InMemoryEventBus(),
+        broker: InMemoryBroker(),
+        host: '0.0.0.0',
+        port: 0,
+      );
+      await expectLater(rose.start(), throwsStateError);
+    });
+
+    test(
+        'starts on a public address with auth, the escape hatch, '
+        'or read-only', () async {
+      for (final rose in [
+        GisilaRose(
+            source: InMemoryEventBus(),
+            control: InMemoryControlChannel(),
+            basicAuth: 'admin:s3cret',
+            host: '0.0.0.0',
+            port: 0),
+        GisilaRose(
+            source: InMemoryEventBus(),
+            broker: InMemoryBroker(),
+            allowUnauthenticated: true,
+            host: '0.0.0.0',
+            port: 0),
+        GisilaRose(source: InMemoryEventBus(), host: '0.0.0.0', port: 0),
+      ]) {
+        await rose.start();
+        await rose.stop();
+      }
+    });
+
+    group('with a running dashboard', () {
+      late GisilaRose rose;
+      late Uri base;
+
+      setUp(() async {
+        rose = GisilaRose(
+          source: InMemoryEventBus(),
+          broker: InMemoryBroker(),
+          basicAuth: 'admin:s3cret',
+          port: 0,
+        );
+        await rose.start();
+        base = Uri.parse('http://127.0.0.1:${rose.boundPort}');
+      });
+      tearDown(() => rose.stop());
+
+      test('binds loopback by default and sends no CORS headers', () async {
+        expect(rose.host, '127.0.0.1');
+        final res = await _get(base, basicAuth: 'admin:s3cret');
+        expect(res.statusCode, 200);
+        expect(res.headers.value('access-control-allow-origin'), isNull);
+      });
+
+      test('a POST that is not JSON is refused before it runs', () async {
+        final client = HttpClient();
+        try {
+          final req =
+              await client.postUrl(base.replace(path: '/api/tasks/fire'));
+          req.headers
+            ..set(HttpHeaders.authorizationHeader,
+                'Basic ${base64Encode(utf8.encode('admin:s3cret'))}')
+            ..contentType = ContentType.text;
+          req.write('{"name":"x"}');
+          final res = await req.close();
+          await res.drain<void>();
+          expect(res.statusCode, 415);
+        } finally {
+          client.close(force: true);
+        }
+      });
+
+      test('near-miss passwords are rejected', () async {
+        for (final guess in ['admin:s3cre', 'admin:s3cret!', 'admin:', '']) {
+          final res = await _get(base, basicAuth: guess);
+          await res.drain<void>();
+          expect(res.statusCode, 401, reason: guess);
+        }
+      });
+    });
+  });
 }

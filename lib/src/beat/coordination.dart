@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:redis/redis.dart';
 
+import '../redis_options.dart';
+
 /// A distributed mutex a [Beat] holds while it's the active scheduler.
 ///
 /// Celery documents that exactly one `celery beat` process must run per
@@ -51,11 +53,15 @@ class RedisBeatLock implements BeatLock {
   RedisBeatLock({
     this.host = 'localhost',
     this.port = 6379,
+    this.options = const RedisOptions(),
     this.prefix = 'gq',
   });
 
   final String host;
   final int port;
+
+  /// Password, TLS and database; see [RedisOptions].
+  final RedisOptions options;
   final String prefix;
 
   String get _key => '$prefix:beat:lock';
@@ -73,7 +79,7 @@ class RedisBeatLock implements BeatLock {
   Future<Command> _doConnect() async {
     try {
       final conn = RedisConnection();
-      final cmd = await conn.connect(host, port);
+      final cmd = await connectRedis(conn, host, port, options);
       _conn = conn;
       _cmd = cmd;
       return cmd;
@@ -164,11 +170,15 @@ class RedisBeatStateStore implements BeatStateStore {
   RedisBeatStateStore({
     this.host = 'localhost',
     this.port = 6379,
+    this.options = const RedisOptions(),
     this.prefix = 'gq',
   });
 
   final String host;
   final int port;
+
+  /// Password, TLS and database; see [RedisOptions].
+  final RedisOptions options;
   final String prefix;
 
   String get _key => '$prefix:beat:lastrun';
@@ -186,7 +196,7 @@ class RedisBeatStateStore implements BeatStateStore {
   Future<Command> _doConnect() async {
     try {
       final conn = RedisConnection();
-      final cmd = await conn.connect(host, port);
+      final cmd = await connectRedis(conn, host, port, options);
       _conn = conn;
       _cmd = cmd;
       return cmd;

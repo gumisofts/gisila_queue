@@ -6,6 +6,7 @@ import '../beat/beat.dart';
 import '../beat/coordination.dart';
 import '../broker/redis_broker.dart';
 import '../logging.dart';
+import '../redis_options.dart';
 import 'cli_args.dart';
 import 'shutdown.dart';
 
@@ -36,6 +37,7 @@ class BeatCli {
     this.args, {
     required this.redisHost,
     required this.redisPort,
+    required this.redisOptions,
     required this.prefix,
     required this.tickInterval,
     required this.lockTtl,
@@ -45,6 +47,9 @@ class BeatCli {
   final CliArgs args;
   final String redisHost;
   final int redisPort;
+
+  /// Password, TLS and database from `--redis-url` / `REDIS_URL`.
+  final RedisOptions redisOptions;
   final String prefix;
   final Duration tickInterval;
   final Duration lockTtl;
@@ -52,10 +57,12 @@ class BeatCli {
 
   factory BeatCli.parse(List<String> argv) {
     final args = CliArgs.parse(argv);
+    final redis = args.redisTarget();
     return BeatCli._(
       args,
-      redisHost: args.stringOr('redis-host', 'localhost'),
-      redisPort: args.intOr('redis-port', 6379),
+      redisHost: redis.host,
+      redisPort: redis.port,
+      redisOptions: redis.options,
       prefix: args.stringOr('prefix', 'gq'),
       tickInterval: Duration(seconds: args.intOr('tick-interval', 1)),
       lockTtl: Duration(seconds: args.intOr('lock-ttl', 30)),
@@ -68,7 +75,8 @@ class BeatCli {
   static const usage = '''
 gisila_queue beat CLI
 
-  dart run bin/beat.dart [--redis-host=localhost] [--redis-port=6379]
+  dart run bin/beat.dart [--redis-url=redis://:PASS@host:6379/0 |
+      --redis-host=localhost --redis-port=6379]
       [--prefix=gq] [--tick-interval=1] [--lock-ttl=30] [--loglevel=info]
 ''';
 
@@ -77,9 +85,16 @@ gisila_queue beat CLI
   /// included anyway so any tasks defined on the same app can be sent
   /// synchronously for testing without a separate producer process.
   GisilaQueue buildApp() => GisilaQueue(
-        broker: RedisBroker(host: redisHost, port: redisPort, prefix: prefix),
+        broker: RedisBroker(
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix),
         backend: RedisResultBackend(
-            host: redisHost, port: redisPort, prefix: prefix),
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix),
         logger: ConsoleQueueLogger(minLevel: logLevel),
       );
 
@@ -91,9 +106,16 @@ gisila_queue beat CLI
         app,
         tickInterval: tickInterval,
         lockTtl: lockTtl,
-        lock: RedisBeatLock(host: redisHost, port: redisPort, prefix: prefix),
+        lock: RedisBeatLock(
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix),
         stateStore: RedisBeatStateStore(
-            host: redisHost, port: redisPort, prefix: prefix),
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix),
       );
 
   /// Starts [beat], prints a startup banner, and blocks until a

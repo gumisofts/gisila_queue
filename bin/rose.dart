@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:gisila_queue/gisila_queue.dart';
+import 'package:gisila_queue/gisila_queue_cli.dart' show CliArgs;
 import 'package:gisila_queue/gisila_rose.dart';
 
 /// Standalone launcher for the GisilaRose dashboard — the gisila_queue
@@ -10,15 +11,21 @@ import 'package:gisila_queue/gisila_rose.dart';
 ///   `dart run gisila_queue:rose [options]`
 ///
 /// Options (all optional):
+///   `--redis-url=URL`     redis://[user:]pass@host:port/db or rediss://
+///                         (TLS); falls back to the REDIS_URL env var
 ///   `--redis-host=HOST`   Redis host (default: localhost)
 ///   `--redis-port=PORT`   Redis port (default: 6379)
 ///   `--prefix=PREFIX`     Key/channel namespace, must match producers/workers
 ///                         (default: gq)
-///   `--host=HOST`         HTTP bind host (default: 0.0.0.0)
+///   `--host=HOST`         HTTP bind host (default: 127.0.0.1). Any other
+///                         address needs --basic-auth while fire/revoke
+///                         are enabled
 ///   `--port=PORT`         HTTP bind port (default: 5555)
 ///   `--basic-auth=U:P`    Require HTTP Basic Auth (Flower-style)
 ///   `--no-queues`         Don't open a broker (no depths / fire / retry)
 ///   `--no-control`        Don't open a control channel (no revoke/pause)
+///   `--allow-unauthenticated`  Serve the write actions without auth on a
+///                         non-loopback host anyway
 Future<void> main(List<String> argv) async {
   final args = _parse(argv);
   if (args.containsKey('help') || args.containsKey('h')) {
@@ -26,10 +33,12 @@ Future<void> main(List<String> argv) async {
     return;
   }
 
-  final redisHost = args['redis-host'] ?? 'localhost';
-  final redisPort = int.tryParse(args['redis-port'] ?? '') ?? 6379;
+  final redis = CliArgs(args).redisTarget();
+  final redisHost = redis.host;
+  final redisPort = redis.port;
+  final redisOptions = redis.options;
   final prefix = args['prefix'] ?? 'gq';
-  final host = args['host'] ?? '0.0.0.0';
+  final host = args['host'] ?? '127.0.0.1';
   final port = int.tryParse(args['port'] ?? '') ?? 5555;
   final withQueues = !args.containsKey('no-queues');
   final withControl = !args.containsKey('no-control');
@@ -42,23 +51,50 @@ Future<void> main(List<String> argv) async {
   }
 
   final rose = GisilaRose(
-    source: RedisEventSource(host: redisHost, port: redisPort, prefix: prefix),
+    source: RedisEventSource(
+        host: redisHost,
+        port: redisPort,
+        options: redisOptions,
+        prefix: prefix),
     broker: withQueues
-        ? RedisBroker(host: redisHost, port: redisPort, prefix: prefix)
+        ? RedisBroker(
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix)
         : null,
     control: withControl
-        ? RedisControlChannel(host: redisHost, port: redisPort, prefix: prefix)
+        ? RedisControlChannel(
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix)
         : null,
-    events: RedisEventSink(host: redisHost, port: redisPort, prefix: prefix),
+    events: RedisEventSink(
+        host: redisHost,
+        port: redisPort,
+        options: redisOptions,
+        prefix: prefix),
     backend: withQueues
-        ? RedisResultBackend(host: redisHost, port: redisPort, prefix: prefix)
+        ? RedisResultBackend(
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix)
         : null,
     basicAuth: basicAuth,
+    allowUnauthenticated: args.containsKey('allow-unauthenticated'),
     host: host,
     port: port,
   );
 
-  await rose.start();
+  try {
+    await rose.start();
+  } on StateError catch (e) {
+    stderr.writeln('error: ${e.message}');
+    exitCode = 64;
+    return;
+  }
   final authNote = basicAuth != null ? ', basic-auth on' : '';
   stdout.writeln('GisilaRose → http://$host:$port  '
       '(redis $redisHost:$redisPort, prefix "$prefix"$authNote)');
@@ -81,9 +117,13 @@ Future<void> main(List<String> argv) async {
 const _usage = '''
 gisila_queue:rose — observability dashboard for gisila_queue
 
-  dart run gisila_queue:rose [--redis-host=H] [--redis-port=P]
-      [--prefix=gq] [--host=0.0.0.0] [--port=5555]
+  dart run gisila_queue:rose [--redis-url=URL | --redis-host=H --redis-port=P]
+      [--prefix=gq] [--host=127.0.0.1] [--port=5555]
       [--basic-auth=user:pass] [--no-queues] [--no-control]
+      [--allow-unauthenticated]
+
+  Binding anything but loopback needs --basic-auth while fire/retry/revoke
+  are available (or --no-queues --no-control, or --allow-unauthenticated).
 ''';
 
 Map<String, String> _parse(List<String> argv) {

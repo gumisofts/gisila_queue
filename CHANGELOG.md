@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Redis password, ACL user, TLS and database.** Every Redis component
+  (`RedisBroker`, `RedisResultBackend`, `RedisEventSink`/`Source`,
+  `RedisControlChannel`, `RedisBeatLock`, `RedisBeatStateStore`) takes
+  `options: RedisOptions(...)`, sent as `AUTH` / `SELECT` on each connection
+  (TLS with an optional `SecurityContext`). `RedisOptions.parseUrl` reads
+  `redis://` / `rediss://` URLs; the worker, beat, inspect and Rose CLIs take
+  `--redis-url` or the `REDIS_URL` environment variable.
+- **Rose dashboard is no longer open by default (breaking).** It binds
+  `127.0.0.1` unless told otherwise (it was `0.0.0.0`), and `start()`
+  throws when it would serve fire/retry/revoke/pause on a non-loopback
+  address without `basicAuth` (`allowUnauthenticated: true` /
+  `--allow-unauthenticated` to override). It sends no CORS headers (it sent
+  `Access-Control-Allow-Origin: *`) and refuses POSTs that aren't
+  `application/json` with `415`, so other sites can't drive it through a
+  signed-in browser. Basic Auth is compared in constant time.
 - **Long tasks no longer run twice.** Workers now `touch` each running
   message at a third of the broker's `visibilityTimeout`, so the Redis
   reaper only redelivers messages whose worker has actually gone away.

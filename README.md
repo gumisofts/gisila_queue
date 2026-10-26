@@ -100,6 +100,21 @@ final add = app.task<int>(
 );
 ```
 
+Redis with a password, TLS or another database: pass `options:` to every
+Redis component, or parse a URL once:
+
+```dart
+final redis = RedisOptions.parseUrl('rediss://app:s3cret@cache:6380/1');
+final app = GisilaQueue(
+  broker: RedisBroker(host: redis.host, port: redis.port, options: redis.options),
+  backend: RedisResultBackend(
+      host: redis.host, port: redis.port, options: redis.options),
+);
+```
+
+The bundled CLIs accept `--redis-url=…` and fall back to the `REDIS_URL`
+environment variable (better for passwords than the command line).
+
 ### Producer
 
 ```dart
@@ -263,7 +278,8 @@ dart run gisila_queue:gisila_queue purge --queue=default
 ```
 
 `WorkerCli`/`BeatCli` (`package:gisila_queue/gisila_queue_cli.dart`) parse the
-standard `--redis-host/port`, `--prefix`, `--loglevel` flags plus their own
+standard `--redis-url` (or `REDIS_URL`), `--redis-host/port`, `--prefix`,
+`--loglevel` flags plus their own
 (`--queues`/`--concurrency` for workers; `--tick-interval`/`--lock-ttl` for
 beat, wiring a `RedisBeatLock` + `RedisBeatStateStore` automatically) and
 install SIGINT/SIGTERM shutdown hooks that close every connection cleanly.
@@ -321,9 +337,15 @@ Flags:
 
 | Flag | Effect |
 | ---- | ------ |
-| `--basic-auth=user:pass` | HTTP Basic Auth on every route (optional; open when omitted) |
+| `--host=HOST` | Bind address (default `127.0.0.1`) |
+| `--basic-auth=user:pass` | HTTP Basic Auth on every route. Required to bind a non-loopback host while fire/retry/revoke/pause are available |
 | `--no-queues` | No broker — disables queue depths, fire, and retry |
 | `--no-control` | No control channel — disables revoke / pause / resume |
+| `--allow-unauthenticated` | Serve the write actions on a non-loopback host without auth anyway |
+
+Rose sends no CORS headers (the UI is same-origin) and only accepts
+`application/json` POST bodies, so another website can't trigger actions
+through a browser that is signed in to it.
 
 …or embed it in your own process:
 
@@ -336,7 +358,8 @@ final rose = GisilaRose(
   control: RedisControlChannel(host: 'localhost'),
   events: RedisEventSink(host: 'localhost'),
   backend: RedisResultBackend(host: 'localhost'),
-  basicAuth: 'admin:secret', // optional
+  basicAuth: 'admin:secret', // needed to bind beyond loopback
+  host: '0.0.0.0', // default 127.0.0.1
   port: 5555,
 );
 await rose.start();

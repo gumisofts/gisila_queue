@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:redis/redis.dart';
 
+import 'redis_options.dart';
+
 /// The kind of instruction a [ControlChannel] carries between producers and
 /// workers — the gisila_queue analogue of Celery's `app.control` broadcast
 /// commands (`revoke`, and the worker pool's `pause`/`resume` consumption).
@@ -129,11 +131,15 @@ class RedisControlChannel implements ControlChannel {
   RedisControlChannel({
     this.host = 'localhost',
     this.port = 6379,
+    this.options = const RedisOptions(),
     this.prefix = 'gq',
   });
 
   final String host;
   final int port;
+
+  /// Password, TLS and database; see [RedisOptions].
+  final RedisOptions options;
   final String prefix;
 
   String get _channel => '$prefix:control';
@@ -151,7 +157,7 @@ class RedisControlChannel implements ControlChannel {
   Future<Command> _doConnectPub() async {
     try {
       final conn = RedisConnection();
-      final cmd = await conn.connect(host, port);
+      final cmd = await connectRedis(conn, host, port, options);
       _pubConn = conn;
       _pub = cmd;
       return cmd;
@@ -200,7 +206,7 @@ class RedisControlChannel implements ControlChannel {
       StreamController<ControlMessage> controller) async {
     try {
       final conn = RedisConnection();
-      final cmd = await conn.connect(host, port);
+      final cmd = await connectRedis(conn, host, port, options);
       _subConn = conn;
       final pubsub = PubSub(cmd);
       pubsub.subscribe([_channel]);

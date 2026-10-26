@@ -62,8 +62,9 @@ class GisilaRose {
     this.backend,
     this.basicAuth,
     MonitorState? state,
-    this.host = '0.0.0.0',
+    this.host = '127.0.0.1',
     this.port = 5555,
+    this.allowUnauthenticated = false,
     this.queuePollInterval = const Duration(seconds: 2),
     Uuid? idGenerator,
   })  : state = state ?? MonitorState(),
@@ -88,7 +89,15 @@ class GisilaRose {
   final String? basicAuth;
 
   final MonitorState state;
+
+  /// Bind address. Defaults to loopback; on any other address [start]
+  /// refuses to serve the write actions (fire, retry, revoke, pause)
+  /// without [basicAuth] unless [allowUnauthenticated] is set.
   final String host;
+
+  /// Serve without auth on a non-loopback [host] even though [broker] or
+  /// [control] make the dashboard able to run and stop tasks.
+  final bool allowUnauthenticated;
   final int port;
 
   /// How often broker queue depths are refreshed.
@@ -114,6 +123,16 @@ class GisilaRose {
   /// Binds the event source, starts queue polling, and begins serving.
   /// Resolves once the server is listening.
   Future<void> start() async {
+    final writable = broker != null || control != null;
+    if (writable &&
+        basicAuth == null &&
+        !allowUnauthenticated &&
+        !_isLoopback(host)) {
+      throw StateError(
+          'GisilaRose: refusing to serve fire/retry/revoke/pause on $host '
+          'without basicAuth. Set basicAuth, bind 127.0.0.1, drop the '
+          'broker and control channel, or pass allowUnauthenticated: true.');
+    }
     await state.bind(source);
     _server = await HttpServer.bind(host, port);
     if (broker != null) {
@@ -169,9 +188,14 @@ class GisilaRose {
 
   Future<void> _route(HttpRequest req) async {
     final res = req.response;
-    _cors(res);
-    if (req.method == 'OPTIONS') {
-      res.statusCode = 204;
+    // No CORS: the dashboard is same-origin. Requiring a JSON body on POST
+    // means another site can't send one without a pre-flight, which fails,
+    // so it can't fire or revoke tasks through a logged-in browser.
+    if (req.method == 'POST' &&
+        req.headers.contentType?.mimeType != ContentType.json.mimeType) {
+      res.statusCode = 415;
+      res.headers.contentType = ContentType.json;
+      res.write(jsonEncode({'error': 'POST bodies must be application/json'}));
       await res.close();
       return;
     }
@@ -481,11 +505,28 @@ class GisilaRose {
     final header = req.headers.value(HttpHeaders.authorizationHeader);
     if (header == null || !header.startsWith('Basic ')) return false;
     try {
-      final decoded = utf8.decode(base64Decode(header.substring(6)));
-      return decoded == expected;
+      return _constantTimeEquals(
+          base64Decode(header.substring(6).trim()), utf8.encode(expected));
     } on Object {
       return false;
     }
+  }
+
+  /// Compares in time that depends only on the lengths, so response timing
+  /// doesn't reveal how much of a guess was right.
+  static bool _constantTimeEquals(List<int> a, List<int> b) {
+    if (b.isEmpty) return false;
+    var diff = a.length ^ b.length;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a[i] ^ b[i % b.length];
+    }
+    return diff == 0;
+  }
+
+  static bool _isLoopback(String host) {
+    if (host == 'localhost') return true;
+    final address = InternetAddress.tryParse(host);
+    return address != null && address.isLoopback;
   }
 
   Future<void> _streamEvents(HttpResponse res) async {
@@ -499,13 +540,6 @@ class GisilaRose {
     _sseClients.add(res);
     // Detach: the response stays open until the client disconnects.
     res.done.whenComplete(() => _sseClients.remove(res));
-  }
-
-  void _cors(HttpResponse res) {
-    res.headers
-      ..set('Access-Control-Allow-Origin', '*')
-      ..set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-      ..set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
 
   void _json(HttpResponse res, Object? body, {int status = 200}) {
