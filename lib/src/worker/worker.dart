@@ -262,8 +262,37 @@ class Worker {
         continue;
       }
       if (message == null) continue;
-      await _process(message);
+      final lease = _keepReserved(message);
+      try {
+        await _process(message);
+      } catch (e, st) {
+        // A failure outside the handler (result backend, event sink, broker
+        // ack...) must not end this slot. The message stays unacked, so a
+        // reliable broker redelivers it after its visibility timeout.
+        app.logger.error('processing ${message.task} id=${message.id} failed '
+            'on slot $slot', error: e, stack: st);
+        await Future<void>.delayed(const Duration(seconds: 1));
+      } finally {
+        lease?.cancel();
+      }
     }
+  }
+
+  /// While [message] is being processed, periodically [Broker.touch]es it
+  /// so a broker with a visibility timeout doesn't redeliver a task that is
+  /// merely slow. Returns null when the broker doesn't need it.
+  Timer? _keepReserved(TaskMessage message) {
+    final timeout = app.broker.visibilityTimeout;
+    if (timeout == null) return null;
+    var interval = timeout ~/ 3;
+    if (interval < const Duration(milliseconds: 50)) {
+      interval = const Duration(milliseconds: 50);
+    }
+    return Timer.periodic(interval, (_) {
+      app.broker.touch(message).then<void>((_) {}, onError: (Object e) {
+        app.logger.warning('touch failed id=${message.id}: $e');
+      });
+    });
   }
 
   Future<void> _process(TaskMessage message) async {

@@ -65,8 +65,18 @@ class RabbitBroker extends Broker {
   /// logical queue name.
   final Map<String, collection.Queue<_Delivery>> _inbox = {};
 
-  /// Reserved but not yet [ack]ed — keyed by [TaskMessage.id].
+  /// Reserved but not yet [ack]ed — keyed by [TaskMessage.deliveryTag], so
+  /// two deliveries of the same task id (a retry re-enqueued before the
+  /// original was acked, or a redelivery) are tracked separately.
   final Map<String, AmqpMessage> _inFlight = {};
+  int _nextTag = 0;
+
+  /// Records [d] as in flight and returns its message tagged for [ack].
+  TaskMessage _checkOut(_Delivery d) {
+    final tag = '${_nextTag++}';
+    _inFlight[tag] = d.amqp;
+    return d.message.withDeliveryTag(tag);
+  }
 
   /// Waiters blocked inside [reserve] until a delivery arrives (or timeout).
   final List<Completer<void>> _waiters = [];
@@ -239,10 +249,7 @@ class RabbitBroker extends Broker {
     final deadline = DateTime.now().add(timeout);
     while (!_closed) {
       final taken = _tryTake(queues);
-      if (taken != null) {
-        _inFlight[taken.message.id] = taken.amqp;
-        return taken.message;
-      }
+      if (taken != null) return _checkOut(taken);
 
       final remaining = deadline.difference(DateTime.now());
       if (remaining <= Duration.zero) return null;
@@ -255,8 +262,7 @@ class RabbitBroker extends Broker {
       if (raced != null) {
         _waiters.remove(waiter);
         if (!waiter.isCompleted) waiter.complete();
-        _inFlight[raced.message.id] = raced.amqp;
-        return raced.message;
+        return _checkOut(raced);
       }
 
       try {
@@ -265,8 +271,7 @@ class RabbitBroker extends Broker {
         _waiters.remove(waiter);
         final last = _tryTake(queues);
         if (last == null) return null;
-        _inFlight[last.message.id] = last.amqp;
-        return last.message;
+        return _checkOut(last);
       } finally {
         _waiters.remove(waiter);
       }
@@ -276,7 +281,9 @@ class RabbitBroker extends Broker {
 
   @override
   Future<void> ack(TaskMessage message) async {
-    final amqp = _inFlight.remove(message.id);
+    final tag = message.deliveryTag;
+    if (tag == null) return;
+    final amqp = _inFlight.remove(tag);
     if (amqp == null) return;
     try {
       amqp.ack();

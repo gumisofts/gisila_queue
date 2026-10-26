@@ -19,6 +19,7 @@ class TaskMessage {
     this.expires,
     this.chain,
     this.chord,
+    this.deliveryTag,
   });
 
   /// Unique id; doubles as the result-backend key.
@@ -77,6 +78,31 @@ class TaskMessage {
   /// for the same reason as [chain]. Null for a message that isn't part of
   /// a chord.
   final Map<String, Object?>? chord;
+
+  /// Identifies one specific delivery of this message by a broker, so
+  /// `Broker.ack` and `Broker.touch` act on exactly that reservation even
+  /// when another copy with the same [id] is in flight (a redelivery, or a
+  /// retry re-enqueued before the original was acked). Set by
+  /// `Broker.reserve`; never serialized, and not carried over by [copyWith].
+  final String? deliveryTag;
+
+  /// A copy of this message tagged as delivery [tag] (see [deliveryTag]).
+  TaskMessage withDeliveryTag(String tag) => TaskMessage(
+        id: id,
+        task: task,
+        queue: queue,
+        args: args,
+        kwargs: kwargs,
+        retries: retries,
+        maxRetries: maxRetries,
+        eta: eta,
+        createdAt: createdAt,
+        redeliveries: redeliveries,
+        expires: expires,
+        chain: chain,
+        chord: chord,
+        deliveryTag: tag,
+      );
 
   /// A copy advanced to the next retry attempt, due at [eta].
   TaskMessage retried({required DateTime eta}) => copyWith(
