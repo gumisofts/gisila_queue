@@ -141,6 +141,33 @@ void main() {
       );
     });
 
+    test('two deliveries with the same id are acked separately', () async {
+      if (!reachable) return;
+      final m = TaskMessage(id: 'dup', task: 't', queue: 'q');
+      await broker.enqueue(m);
+      await broker.enqueue(m);
+      final first =
+          await broker.reserve(['q'], timeout: const Duration(seconds: 3));
+      final second =
+          await broker.reserve(['q'], timeout: const Duration(seconds: 3));
+      expect(first!.deliveryTag, isNot(second!.deliveryTag));
+      await broker.ack(first);
+      await broker.ack(second);
+      // If either ack had hit the wrong delivery, one would still be
+      // unacked and come back once this connection closes.
+      await broker.close();
+      broker = RabbitBroker(
+        host: _host,
+        port: _port,
+        prefix: prefix,
+        prefetchCount: 8,
+      );
+      expect(
+        await broker.reserve(['q'], timeout: const Duration(seconds: 1)),
+        isNull,
+      );
+    });
+
     test('multi-queue priority: higher queues drain first', () async {
       if (!reachable) return;
       // Start consumers on both queues while empty so later publishes land

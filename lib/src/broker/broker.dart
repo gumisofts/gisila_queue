@@ -27,6 +27,15 @@ abstract class Broker {
   /// list brokers; meaningful for reliable-queue implementations.
   Future<void> ack(TaskMessage message) async {}
 
+  /// How long a reserved message may go unacked before the broker assumes
+  /// its worker died and redelivers it, or null if this broker never does.
+  /// Workers [touch] each running message well inside this window.
+  Duration? get visibilityTimeout => null;
+
+  /// Extends the reservation of a still-running [message] so it isn't
+  /// redelivered while its handler is working. No-op by default.
+  Future<void> touch(TaskMessage message) async {}
+
   /// Number of ready (non-delayed) messages waiting on [queue].
   Future<int> length(String queue);
 

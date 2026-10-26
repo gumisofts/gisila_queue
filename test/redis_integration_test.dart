@@ -144,6 +144,95 @@ void main() {
       expect(again, isNull);
     });
 
+    test('a touched reservation is not redelivered', () async {
+      if (!reachable) return;
+      await broker.enqueue(TaskMessage(id: 'slow', task: 't', queue: 'q'));
+      final held =
+          await broker.reserve(['q'], timeout: const Duration(seconds: 2));
+      for (var i = 0; i < 6; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await broker.touch(held!);
+      }
+      // 600ms held against a 300ms visibility timeout, but touched.
+      final again =
+          await broker.reserve(['q'], timeout: const Duration(seconds: 1));
+      expect(again, isNull);
+      expect(await broker.unackedCount(), 1);
+    });
+
+    test('acking one copy leaves another copy with the same id reserved',
+        () async {
+      if (!reachable) return;
+      final m = TaskMessage(id: 'dup', task: 't', queue: 'q');
+      await broker.enqueue(m);
+      await broker.enqueue(m);
+      final first =
+          await broker.reserve(['q'], timeout: const Duration(seconds: 2));
+      final second =
+          await broker.reserve(['q'], timeout: const Duration(seconds: 2));
+      expect(first!.deliveryTag, isNot(second!.deliveryTag));
+      expect(await broker.unackedCount(), 2);
+      await broker.ack(first);
+      expect(await broker.unackedCount(), 1);
+      await broker.ack(second);
+      expect(await broker.unackedCount(), 0);
+    });
+
+    test('undecodable messages go to the dead-letter list', () async {
+      if (!reachable) return;
+      final conn = redis.RedisConnection();
+      final cmd = await conn.connect(_host, _port);
+      await cmd.send_object(<Object>['LPUSH', '$prefix:queue:q', 'not json']);
+      final due = DateTime.now().millisecondsSinceEpoch - 1000;
+      await cmd.send_object(
+          <Object>['ZADD', '$prefix:scheduled', '$due', '{broken']);
+      await conn.close();
+      await broker.enqueue(TaskMessage(id: 'good', task: 't', queue: 'q'));
+
+      final msg =
+          await broker.reserve(['q'], timeout: const Duration(seconds: 2));
+      expect(msg!.id, 'good');
+      expect(await broker.deadLetterCount(), 2);
+      expect(await broker.unackedCount(), 1);
+    });
+
+    test('an idle reserve wakes as soon as a message is enqueued', () async {
+      if (!reachable) return;
+      final sw = Stopwatch()..start();
+      final pending =
+          broker.reserve(['q'], timeout: const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await broker.enqueue(TaskMessage(id: 'wake', task: 't', queue: 'q'));
+      final msg = await pending;
+      expect(msg!.id, 'wake');
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+    });
+
+    test('a worker runs a task longer than the visibility timeout once',
+        () async {
+      if (!reachable) return;
+      final app = GisilaQueue(
+        broker: broker,
+        backend: InMemoryResultBackend(),
+        logger: SilentQueueLogger(),
+      );
+      var runs = 0;
+      app.task<void>('long', (ctx) async {
+        runs++;
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+        return null;
+      });
+      // Two slots, so a redelivered copy would be picked up while the first
+      // is still running.
+      final worker = app.worker(concurrency: 2)..run();
+      final r = await app.send<void>('long');
+      await r.get(timeout: const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      expect(runs, 1);
+      expect(await broker.unackedCount(), 0);
+      await worker.stop();
+    });
+
     test('reconnects transparently after the cached connection is killed',
         () async {
       if (!reachable) return;

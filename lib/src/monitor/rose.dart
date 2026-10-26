@@ -177,7 +177,8 @@ class GisilaRose {
     }
     if (!_authorized(req)) {
       res.statusCode = 401;
-      res.headers.set(HttpHeaders.wwwAuthenticateHeader, 'Basic realm="GisilaRose"');
+      res.headers
+          .set(HttpHeaders.wwwAuthenticateHeader, 'Basic realm="GisilaRose"');
       res.headers.contentType = ContentType.json;
       res.write(jsonEncode({'error': 'unauthorized'}));
       await res.close();
