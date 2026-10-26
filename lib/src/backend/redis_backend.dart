@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:redis/redis.dart';
 
+import '../redis_options.dart';
+
 import 'result_backend.dart';
 
 /// Redis-backed [ResultBackend]. Each result is a string key at
@@ -15,12 +17,16 @@ class RedisResultBackend extends ResultBackend {
   RedisResultBackend({
     this.host = 'localhost',
     this.port = 6379,
+    this.options = const RedisOptions(),
     this.prefix = 'gq',
     this.resultTtl = const Duration(hours: 24),
   });
 
   final String host;
   final int port;
+
+  /// Password, TLS and database; see [RedisOptions].
+  final RedisOptions options;
   final String prefix;
 
   /// How long a stored result survives before Redis evicts it.
@@ -41,7 +47,7 @@ class RedisResultBackend extends ResultBackend {
   Future<Command> _doConnect() async {
     try {
       final conn = RedisConnection();
-      final cmd = await conn.connect(host, port);
+      final cmd = await connectRedis(conn, host, port, options);
       _conn = conn;
       _cmd = cmd;
       return cmd;

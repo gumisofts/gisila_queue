@@ -5,6 +5,7 @@ import '../backend/redis_backend.dart';
 import '../broker/redis_broker.dart';
 import '../control.dart';
 import '../logging.dart';
+import '../redis_options.dart';
 import '../worker/worker.dart';
 import 'cli_args.dart';
 import 'shutdown.dart';
@@ -33,6 +34,7 @@ class WorkerCli {
     this.args, {
     required this.redisHost,
     required this.redisPort,
+    required this.redisOptions,
     required this.prefix,
     required this.queues,
     required this.concurrency,
@@ -42,6 +44,9 @@ class WorkerCli {
   final CliArgs args;
   final String redisHost;
   final int redisPort;
+
+  /// Password, TLS and database from `--redis-url` / `REDIS_URL`.
+  final RedisOptions redisOptions;
   final String prefix;
   final List<String> queues;
   final int concurrency;
@@ -49,10 +54,12 @@ class WorkerCli {
 
   factory WorkerCli.parse(List<String> argv) {
     final args = CliArgs.parse(argv);
+    final redis = args.redisTarget();
     return WorkerCli._(
       args,
-      redisHost: args.stringOr('redis-host', 'localhost'),
-      redisPort: args.intOr('redis-port', 6379),
+      redisHost: redis.host,
+      redisPort: redis.port,
+      redisOptions: redis.options,
       prefix: args.stringOr('prefix', 'gq'),
       queues: args.stringList('queues') ?? const ['default'],
       concurrency: args.intOr('concurrency', 1),
@@ -66,19 +73,30 @@ class WorkerCli {
 gisila_queue worker CLI
 
   dart run bin/worker.dart [--queues=default] [--concurrency=1]
-      [--redis-host=localhost] [--redis-port=6379] [--prefix=gq]
+      [--redis-url=redis://:PASS@host:6379/0 | --redis-host=localhost
+       --redis-port=6379] [--prefix=gq]
       [--loglevel=info]
 ''';
 
   /// Builds a Redis-backed [GisilaQueue] from the parsed flags. Register
   /// your own tasks on the result before calling [run].
   GisilaQueue buildApp() => GisilaQueue(
-        broker: RedisBroker(host: redisHost, port: redisPort, prefix: prefix),
+        broker: RedisBroker(
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix),
         backend: RedisResultBackend(
-            host: redisHost, port: redisPort, prefix: prefix),
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix),
         logger: ConsoleQueueLogger(minLevel: logLevel),
         controlChannel: RedisControlChannel(
-            host: redisHost, port: redisPort, prefix: prefix),
+            host: redisHost,
+            port: redisPort,
+            options: redisOptions,
+            prefix: prefix),
       );
 
   /// Builds a [Worker] for [app] from the parsed flags, starts it, prints a

@@ -1,3 +1,7 @@
+import 'dart:io';
+
+import '../redis_options.dart';
+
 /// Minimal `--flag` / `--flag=value` parser shared by gisila_queue's CLI
 /// helpers ([WorkerCli], [BeatCli]) and `bin/rose.dart`, so every
 /// gisila_queue binary parses arguments the same way.
@@ -26,6 +30,19 @@ class CliArgs {
   String? string(String key) => _values[key];
 
   String stringOr(String key, String fallback) => _values[key] ?? fallback;
+
+  /// Where Redis is: `--redis-url`, else the `REDIS_URL` environment
+  /// variable (keeps a password out of the process list), else
+  /// `--redis-host` / `--redis-port`.
+  ({String host, int port, RedisOptions options}) redisTarget() {
+    final url = string('redis-url') ?? Platform.environment['REDIS_URL'];
+    if (url != null && url.isNotEmpty) return RedisOptions.parseUrl(url);
+    return (
+      host: stringOr('redis-host', 'localhost'),
+      port: intOr('redis-port', 6379),
+      options: const RedisOptions(),
+    );
+  }
 
   int intOr(String key, int fallback) =>
       int.tryParse(_values[key] ?? '') ?? fallback;

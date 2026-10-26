@@ -4,6 +4,7 @@ import 'package:redis/redis.dart';
 import 'package:uuid/uuid.dart';
 
 import '../message.dart';
+import '../redis_options.dart';
 import 'broker.dart';
 
 /// Distributed [Broker] backed by Redis, compatible with multiple worker
@@ -44,6 +45,7 @@ class RedisBroker extends Broker {
   RedisBroker({
     this.host = 'localhost',
     this.port = 6379,
+    this.options = const RedisOptions(),
     this.prefix = 'gq',
     this.visibilityTimeout = const Duration(minutes: 5),
     this.deadLetterLimit = 10000,
@@ -51,6 +53,9 @@ class RedisBroker extends Broker {
 
   final String host;
   final int port;
+
+  /// Password, TLS and database; see [RedisOptions].
+  final RedisOptions options;
 
   /// Key namespace prefix shared by every queue/scheduled key.
   final String prefix;
@@ -166,7 +171,7 @@ return 1
   Future<Command> _doConnectProducer() async {
     try {
       final conn = RedisConnection();
-      final cmd = await conn.connect(host, port);
+      final cmd = await connectRedis(conn, host, port, options);
       _producerConn = conn;
       _producer = cmd;
       return cmd;
@@ -184,7 +189,7 @@ return 1
   Future<Command> _doConnectConsumer() async {
     try {
       final conn = RedisConnection();
-      final cmd = await conn.connect(host, port);
+      final cmd = await connectRedis(conn, host, port, options);
       _consumerConn = conn;
       _consumer = cmd;
       return cmd;

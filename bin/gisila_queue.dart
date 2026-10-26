@@ -9,7 +9,8 @@ import 'package:gisila_queue/gisila_queue_cli.dart';
 ///   `dart run gisila_queue:gisila_queue inspect [--queues=a,b] [options]`
 ///   `dart run gisila_queue:gisila_queue purge --queue=NAME [options]`
 ///
-/// Options (all optional): `--redis-host=HOST` (default: localhost),
+/// Options (all optional): `--redis-url=URL` (or `REDIS_URL`; see
+/// [RedisOptions.parseUrl]), `--redis-host=HOST` (default: localhost),
 /// `--redis-port=PORT` (default: 6379), `--prefix=PREFIX` (default: gq).
 Future<void> main(List<String> argv) async {
   if (argv.isEmpty || argv.first == '--help' || argv.first == '-h') {
@@ -20,10 +21,12 @@ Future<void> main(List<String> argv) async {
 
   final command = argv.first;
   final args = CliArgs.parse(argv.skip(1).toList());
-  final host = args.stringOr('redis-host', 'localhost');
-  final port = args.intOr('redis-port', 6379);
+  final redis = args.redisTarget();
+  final host = redis.host;
+  final port = redis.port;
   final prefix = args.stringOr('prefix', 'gq');
-  final broker = RedisBroker(host: host, port: port, prefix: prefix);
+  final broker = RedisBroker(
+      host: host, port: port, options: redis.options, prefix: prefix);
 
   try {
     switch (command) {
@@ -60,7 +63,9 @@ const _usage = '''
 gisila_queue — inspect/purge utility
 
   dart run gisila_queue:gisila_queue inspect [--queues=default,emails]
-      [--redis-host=H] [--redis-port=P] [--prefix=gq]
+      [--redis-url=URL | --redis-host=H --redis-port=P] [--prefix=gq]
   dart run gisila_queue:gisila_queue purge --queue=NAME
-      [--redis-host=H] [--redis-port=P] [--prefix=gq]
+      [--redis-url=URL | --redis-host=H --redis-port=P] [--prefix=gq]
+
+  --redis-url falls back to the REDIS_URL environment variable.
 ''';

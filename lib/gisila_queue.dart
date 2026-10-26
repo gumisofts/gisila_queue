@@ -48,6 +48,7 @@ export 'src/exceptions.dart';
 export 'src/logging.dart';
 export 'src/message.dart';
 export 'src/rate_limit.dart';
+export 'src/redis_options.dart';
 export 'src/result.dart';
 export 'src/router.dart';
 export 'src/task.dart';
