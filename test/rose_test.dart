@@ -203,7 +203,9 @@ void main() {
 
       final json = await _getJson(base.replace(path: '/api/workers'));
       final workers = json['workers'] as List;
-      final w1 = workers.cast<Map>().firstWhere((w) => w['id'] == 'w1');
+      final w1 = workers
+          .cast<Map<String, dynamic>>()
+          .firstWhere((w) => w['id'] == 'w1');
       expect(w1['active_task_ids'], contains('running-1'));
 
       final detail = await _getJson(base.replace(path: '/api/workers/w1'));
@@ -309,7 +311,8 @@ void main() {
       final sub = control.subscribe().listen(msgs.add);
       addTearDown(sub.cancel);
 
-      var res = await _postJson(base.replace(path: '/api/queues/default/pause'));
+      var res =
+          await _postJson(base.replace(path: '/api/queues/default/pause'));
       expect(res.status, 200);
       res = await _postJson(base.replace(path: '/api/queues/default/resume'));
       expect(res.status, 200);
