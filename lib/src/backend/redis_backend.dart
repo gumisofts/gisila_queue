@@ -125,6 +125,19 @@ class RedisResultBackend extends ResultBackend {
       });
 
   @override
+  Future<String?> claimKey(String key, String taskId, Duration ttl) =>
+      _withCommand((cmd) async {
+        final k = '$prefix:dedupe:$key';
+        final set = await cmd.send_object(<Object>[
+          'SET', k, taskId, 'NX', 'PX', '${ttl.inMilliseconds}', //
+        ]);
+        if (set != null && '$set'.toUpperCase() == 'OK') return null;
+        final held = await cmd.send_object(<Object>['GET', k]);
+        // Expired between the two calls: treat as claimed by us next time.
+        return held?.toString() ?? taskId;
+      });
+
+  @override
   Future<bool> chordAbort(String chordId) => _withCommand((cmd) async {
         final result = await cmd.send_object(<Object>[
           'SET',

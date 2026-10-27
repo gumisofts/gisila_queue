@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `Schedule.cron('*/15 9-17 * * 1-5')`: 5-field cron schedules for Beat.
+- `send(..., dedupeKey:, dedupeFor:)`: a repeat send with the same key
+  within the window returns the first task's id instead of enqueuing again
+  (needs a result backend; atomic on Redis).
+- `Worker.stop(timeout:)`; the worker CLI takes `--drain-timeout` (30 s).
+- `RedisBroker` promotes delayed messages and reaps stale ones at most once
+  per `maintenanceInterval` per process (1 s, or half the visibility
+  timeout), instead of on every slot's every poll.
 - **RabbitMQ delays no longer block each other.** Delayed messages wait in
   `<prefix>.delay.<ms>` buckets (100 ms × 2ⁿ, each with one queue-level
   TTL) instead of one queue with per-message TTLs, where RabbitMQ only

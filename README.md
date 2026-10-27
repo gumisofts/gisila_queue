@@ -222,6 +222,18 @@ the limit has passed. `softTimeLimit` is purely cooperative: poll
 early instead. A task past its
 `expires` is recorded as `TaskState.revoked` instead of running.
 
+## Cron schedules and deduplication
+
+```dart
+beat.schedule('reports', 'reports.render',
+    Schedule.cron('0 6 * * 1-5')); // 06:00 on weekdays
+
+// Clicking "pay" twice enqueues one charge: the second send returns the
+// first task's id.
+await app.send<void>('billing.charge',
+    args: [orderId], dedupeKey: 'order-$orderId');
+```
+
 ## Workflow primitives (chain, group, chord)
 
 ```dart

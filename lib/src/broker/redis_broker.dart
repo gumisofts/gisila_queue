@@ -259,6 +259,31 @@ return 1
         }
       });
 
+  /// Promotion and reaping scan Redis; every concurrency slot calls
+  /// [reserve], so without this they ran once per slot per poll. Once per
+  /// [maintenanceInterval] per broker is enough: they are idempotent and
+  /// shared by every slot of the process.
+  Future<void> _maintain() async {
+    final now = DateTime.now();
+    final last = _lastMaintenance;
+    if (last != null && now.difference(last) < maintenanceInterval) return;
+    _lastMaintenance = now;
+    await _promoteDue();
+    await _reapStale();
+  }
+
+  DateTime? _lastMaintenance;
+
+  /// How often [reserve] promotes due delayed messages and redelivers stale
+  /// ones; also the worst extra delay for a delayed message. Defaults to
+  /// 1 s, or half the [visibilityTimeout] when that is shorter.
+  Duration get maintenanceInterval {
+    final half = visibilityTimeout ~/ 2;
+    return half < const Duration(seconds: 1)
+        ? half
+        : const Duration(seconds: 1);
+  }
+
   /// Moves every due message out of the scheduled set into its queue. Each
   /// move is one script ([_moveScript]), so a crash can't drop a message
   /// between the `ZREM` and the `LPUSH`, and under concurrent workers only
@@ -372,8 +397,7 @@ return 1
   @override
   Future<TaskMessage?> reserve(List<String> queues,
       {required Duration timeout}) async {
-    await _promoteDue();
-    await _reapStale();
+    await _maintain();
     final ready = await _take(queues);
     if (ready != null) return ready;
     // Nothing ready: park on the queues' notify lists until a producer (or
@@ -387,6 +411,9 @@ return 1
           ...queues.map(_notifyKey),
           '$seconds',
         ]));
+    // Time has passed while parked: promote/reap if due, so a redelivery or
+    // a delayed message isn't held back by a whole extra wait.
+    await _maintain();
     return _take(queues);
   }
 

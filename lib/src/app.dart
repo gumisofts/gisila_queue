@@ -155,6 +155,8 @@ class GisilaQueue {
     String? id,
     List<Map<String, Object?>>? chain,
     Map<String, Object?>? chord,
+    String? dedupeKey,
+    Duration dedupeFor = const Duration(hours: 1),
   }) async {
     validateEncodable(taskName, args, kwargs);
     final effectiveQueue = queue ??
@@ -174,6 +176,19 @@ class GisilaQueue {
       chain: chain,
       chord: chord,
     );
+    if (dedupeKey != null) {
+      final store = backend;
+      if (store == null) {
+        throw StateError('send(dedupeKey:) needs a result backend.');
+      }
+      final existing =
+          await store.claimKey('$taskName:$dedupeKey', message.id, dedupeFor);
+      if (existing != null) {
+        logger.debug('dedupe: $taskName key=$dedupeKey already sent as '
+            '$existing; not enqueued again');
+        return AsyncResult<T>(this, existing);
+      }
+    }
     final delayed = message.isDelayed(DateTime.now());
     await backend?.store(
       message.id,

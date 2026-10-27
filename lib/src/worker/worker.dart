@@ -239,12 +239,25 @@ class Worker {
 
   /// Signals every consumer loop to stop after its current task and waits
   /// for them to drain.
-  Future<void> stop() async {
+  ///
+  /// With [timeout], gives up waiting after that long: tasks still running
+  /// are left unacked, so a broker with a visibility timeout hands them to
+  /// another worker.
+  Future<void> stop({Duration? timeout}) async {
     if (!_running) return;
     _running = false;
     _heartbeat?.cancel();
     _heartbeat = null;
-    await Future.wait(_loops);
+    final drained = Future.wait(_loops);
+    if (timeout == null) {
+      await drained;
+    } else {
+      await drained.timeout(timeout, onTimeout: () {
+        app.logger.warning('worker $id: $_active task(s) still running '
+            'after ${timeout.inSeconds}s; stopping without them');
+        return const [];
+      });
+    }
     _loops.clear();
     await _controlSub?.cancel();
     _controlSub = null;
