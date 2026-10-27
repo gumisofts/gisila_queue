@@ -258,11 +258,15 @@ class GisilaQueue {
   ///   `[defaultQueue]`.
   /// * [concurrency] — how many messages to process at once within this
   ///   process. Scale further by running more worker processes.
+  /// * [deadLetterQueue], [maxRequeues], [maxRedeliveries] — see [Worker].
   Worker worker({
     List<String>? queues,
     int concurrency = 1,
     Duration reserveTimeout = const Duration(seconds: 5),
     String? id,
+    String? deadLetterQueue = Worker.defaultDeadLetterQueue,
+    int maxRequeues = 10,
+    int maxRedeliveries = 5,
   }) {
     return Worker(
       this,
@@ -270,7 +274,43 @@ class GisilaQueue {
       concurrency: concurrency,
       reserveTimeout: reserveTimeout,
       id: id, // null -> Worker defaults to a human-readable host:pid
+      deadLetterQueue: deadLetterQueue,
+      maxRequeues: maxRequeues,
+      maxRedeliveries: maxRedeliveries,
     );
+  }
+
+  /// Moves up to [limit] messages from the dead-letter [queue] back to the
+  /// queue each one failed on, with its retry, requeue and redelivery
+  /// counters reset, and returns how many were moved. Fix whatever made them
+  /// fail first, or they will end up back on [queue].
+  Future<int> replayDeadLetters({
+    String queue = Worker.defaultDeadLetterQueue,
+    int limit = 100,
+  }) async {
+    var moved = 0;
+    while (moved < limit) {
+      final message = await broker
+          .reserve([queue], timeout: const Duration(milliseconds: 200));
+      if (message == null) break;
+      final origin = message.deadLetter?['queue'];
+      // Pending again, so an AsyncResult waits for the new run instead of
+      // returning the old failure.
+      await backend?.store(
+        message.id,
+        StoredResult(state: TaskState.pending, updatedAt: DateTime.now()),
+      );
+      await broker.enqueue(message.copyWith(
+        queue: origin is String ? origin : defaultQueue,
+        retries: 0,
+        requeues: 0,
+        redeliveries: 0,
+        clearDeadLetter: true,
+      ));
+      await broker.ack(message);
+      moved++;
+    }
+    return moved;
   }
 
   /// Closes the broker, backend, and event-sink connections.

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **RabbitMQ delays no longer block each other.** Delayed messages wait in
+  `<prefix>.delay.<ms>` buckets (100 ms × 2ⁿ, each with one queue-level
+  TTL) instead of one queue with per-message TTLs, where RabbitMQ only
+  expired the head: a 1-hour job used to hold every shorter one behind it.
+  The consumer moves a message through further buckets until it is due and
+  holds the last < 100 ms itself, so nothing is handed out early. The old
+  `<prefix>.scheduled` queue is still declared so its messages drain.
+- **Beat failover.** A standby that becomes leader reloads every entry's
+  persisted last-run time first, instead of using what it read while it
+  stood by (it refired whatever the old leader had just run). Ticks no
+  longer overlap. `RedisBeatLock` renews and releases with Lua
+  compare-and-expire / compare-and-delete, so it never extends or deletes
+  a lock another instance took over.
+- **Dead-letter queue.** Messages that fail for good (after their last
+  retry, unknown task names, more than `maxRequeues` `RejectTask(requeue:
+  true)`s, or more than `maxRedeliveries` unacked redeliveries) are put on
+  `dead_letter` with `TaskMessage.deadLetter` = `{reason, queue, at}`.
+  `app.replayDeadLetters()` sends them back. `Worker`/`app.worker` take
+  `deadLetterQueue` (null turns it off), `maxRequeues` (10) and
+  `maxRedeliveries` (5). Messages carry a `requeues` counter.
+- **Hard time limits hold the slot.** A handler past `timeLimit` is still
+  recorded as timed out immediately, but its concurrency slot stays busy
+  until the handler returns (with a warning every `timeLimit`), so abandoned
+  handlers no longer pile up beyond `concurrency`. `ctx.isAbandoned` tells a
+  handler it was abandoned. `stop()` stops waiting for them.
+- Redis integration tests need `GISILA_TEST_REDIS_PORT`; they no longer
+  default to a local Redis on 6379.
 - **Redis password, ACL user, TLS and database.** Every Redis component
   (`RedisBroker`, `RedisResultBackend`, `RedisEventSink`/`Source`,
   `RedisControlChannel`, `RedisBeatLock`, `RedisBeatStateStore`) takes

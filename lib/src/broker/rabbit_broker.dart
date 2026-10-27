@@ -12,12 +12,20 @@ import 'broker.dart';
 ///
 /// * Direct exchange `<prefix>.tasks` routes ready work to durable queues
 ///   `<prefix>.queue.<name>` (binding key = logical queue name).
-/// * Fanout exchange `<prefix>.delay` feeds a durable `<prefix>.scheduled`
-///   queue configured with `x-dead-letter-exchange` → `<prefix>.tasks`.
-///   Delayed (ETA) messages are published there with a per-message
-///   `expiration` (TTL). When the TTL elapses RabbitMQ dead-letters the
-///   message onto the tasks exchange using the original routing key (the
-///   logical queue name), so it lands on the correct work queue.
+/// * Delayed (ETA) messages wait in delay buckets: for each bucket length
+///   `b` = 100 ms × 2ⁿ, a fanout exchange and a durable queue
+///   `<prefix>.delay.<b>` with `x-message-ttl: b` and
+///   `x-dead-letter-exchange` → `<prefix>.tasks`. A message goes into the
+///   largest bucket not longer than its remaining delay; when the bucket's
+///   TTL elapses RabbitMQ dead-letters it onto the tasks exchange with the
+///   original routing key (the logical queue name). If time is still left,
+///   the consumer puts it into the next bucket instead of handing it out.
+///   Every message in a bucket has the same TTL, so expiry order is queue
+///   order and a long delay never holds up a short one (RabbitMQ only
+///   expires messages at the head of a queue).
+/// * `<prefix>.delay` / `<prefix>.scheduled` (one queue with per-message
+///   TTLs, used before the buckets) are still declared so messages already
+///   in them are delivered.
 ///
 /// Delivery is at-least-once: [reserve] hands out a manually-acked AMQP
 /// delivery, and [ack] confirms it. Unacked messages (worker crash, or
@@ -58,6 +66,25 @@ class RabbitBroker extends Broker {
   bool _closed = false;
 
   final Set<String> _declaredQueues = {};
+  final Map<int, Exchange> _delayBuckets = {};
+
+  /// Shortest delay bucket; a message due sooner than this is sent
+  /// straight to its queue, and the consumer holds it until it is due.
+  static const minDelayBucketMs = 100;
+
+  /// Longest bucket (100 ms × 2²⁰, about 29 hours); longer delays take it
+  /// more than once.
+  static const maxDelayBucketMs = minDelayBucketMs << 20;
+
+  /// The largest bucket not longer than [delayMs] (at least the smallest).
+  static int delayBucketFor(int delayMs) {
+    var bucket = minDelayBucketMs;
+    while (bucket < maxDelayBucketMs && bucket * 2 <= delayMs) {
+      bucket *= 2;
+    }
+    return bucket;
+  }
+
   final Map<String, Consumer> _consumers = {};
   final Map<String, StreamSubscription<AmqpMessage>> _subscriptions = {};
 
@@ -181,6 +208,25 @@ class RabbitBroker extends Broker {
       } catch (_) {}
       return;
     }
+    // Out of a delay bucket with time still left: on to the next bucket,
+    // or, for less than the smallest bucket, held here (still unacked)
+    // until it is due.
+    final left = _remainingMs(message, DateTime.now());
+    if (left >= minDelayBucketMs) {
+      _publishDelayed(message, amqp.payloadAsString, left).then(
+        (_) => amqp.ack(),
+        onError: (Object _) {
+          try {
+            amqp.reject(true);
+          } catch (_) {}
+        },
+      );
+      return;
+    }
+    if (left > 0) {
+      Timer(Duration(milliseconds: left), () => _onDelivery(logical, amqp));
+      return;
+    }
     _inbox
         .putIfAbsent(logical, collection.Queue<_Delivery>.new)
         .add(_Delivery(message: message, amqp: amqp));
@@ -217,20 +263,9 @@ class RabbitBroker extends Broker {
     await _ensureWorkQueue(message.queue);
     final payload = message.encode();
     final now = DateTime.now();
-    if (message.isDelayed(now)) {
-      final delayMs = message.eta!.difference(now).inMilliseconds;
-      if (delayMs <= 0) {
-        _tasksExchange!.publish(
-          payload,
-          message.queue,
-          properties: _persistentProps(message),
-        );
-        return;
-      }
-      // Routing key is ignored by the fanout delay exchange for routing, but
-      // RabbitMQ preserves it for dead-lettering onto the tasks exchange.
-      final props = _persistentProps(message)..expiration = '$delayMs';
-      _delayExchange!.publish(payload, message.queue, properties: props);
+    final delayMs = _remainingMs(message, now);
+    if (delayMs >= minDelayBucketMs) {
+      await _publishDelayed(message, payload, delayMs);
     } else {
       _tasksExchange!.publish(
         payload,
@@ -238,6 +273,33 @@ class RabbitBroker extends Broker {
         properties: _persistentProps(message),
       );
     }
+  }
+
+  static int _remainingMs(TaskMessage message, DateTime now) =>
+      message.isDelayed(now) ? message.eta!.difference(now).inMilliseconds : 0;
+
+  Future<void> _publishDelayed(
+      TaskMessage message, String payload, int delayMs) async {
+    final bucket = delayBucketFor(delayMs);
+    var exchange = _delayBuckets[bucket];
+    if (exchange == null) {
+      final channel = _channel!;
+      exchange = await channel.exchange(
+          '$prefix.delay.$bucket', ExchangeType.FANOUT,
+          durable: true);
+      final queue = await channel.queue('$prefix.delay.$bucket',
+          durable: true,
+          arguments: <String, Object>{
+            'x-message-ttl': bucket,
+            'x-dead-letter-exchange': _tasksExchangeName,
+          });
+      await queue.bind(exchange, '');
+      _delayBuckets[bucket] = exchange;
+    }
+    // The fanout exchange ignores the routing key, but RabbitMQ keeps it
+    // for dead-lettering onto the tasks exchange.
+    exchange.publish(payload, message.queue,
+        properties: _persistentProps(message));
   }
 
   @override
@@ -335,6 +397,19 @@ class RabbitBroker extends Broker {
       } catch (_) {}
     }
     _declaredQueues.clear();
+    for (final bucket in List<int>.from(_delayBuckets.keys)) {
+      try {
+        final q = await channel.queue('$prefix.delay.$bucket',
+            durable: true,
+            arguments: <String, Object>{
+              'x-message-ttl': bucket,
+              'x-dead-letter-exchange': _tasksExchangeName,
+            });
+        await q.delete();
+        await _delayBuckets[bucket]!.delete();
+      } catch (_) {}
+    }
+    _delayBuckets.clear();
     try {
       final scheduled =
           await channel.queue(_scheduledQueueName, durable: true, arguments: {
@@ -410,6 +485,7 @@ class RabbitBroker extends Broker {
     _tasksExchange = null;
     _delayExchange = null;
     _declaredQueues.clear();
+    _delayBuckets.clear();
   }
 }
 

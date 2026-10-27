@@ -19,6 +19,8 @@ class TaskMessage {
     this.expires,
     this.chain,
     this.chord,
+    this.requeues = 0,
+    this.deadLetter,
     this.deliveryTag,
   });
 
@@ -79,6 +81,15 @@ class TaskMessage {
   /// a chord.
   final Map<String, Object?>? chord;
 
+  /// How many times a handler has put this message back with
+  /// `RejectTask(requeue: true)`. A worker dead-letters it past
+  /// `Worker.maxRequeues`, so a task that always rejects cannot loop forever.
+  final int requeues;
+
+  /// Why and when this message was dead-lettered (`reason`, `queue` it came
+  /// from, `at`); null unless it sits on a dead-letter queue.
+  final Map<String, Object?>? deadLetter;
+
   /// Identifies one specific delivery of this message by a broker, so
   /// `Broker.ack` and `Broker.touch` act on exactly that reservation even
   /// when another copy with the same [id] is in flight (a redelivery, or a
@@ -101,6 +112,8 @@ class TaskMessage {
         expires: expires,
         chain: chain,
         chord: chord,
+        requeues: requeues,
+        deadLetter: deadLetter,
         deliveryTag: tag,
       );
 
@@ -124,6 +137,9 @@ class TaskMessage {
     DateTime? expires,
     List<Map<String, Object?>>? chain,
     Map<String, Object?>? chord,
+    int? requeues,
+    Map<String, Object?>? deadLetter,
+    bool clearDeadLetter = false,
   }) {
     return TaskMessage(
       id: id,
@@ -139,6 +155,8 @@ class TaskMessage {
       expires: expires ?? this.expires,
       chain: chain ?? this.chain,
       chord: chord ?? this.chord,
+      requeues: requeues ?? this.requeues,
+      deadLetter: clearDeadLetter ? null : (deadLetter ?? this.deadLetter),
     );
   }
 
@@ -157,6 +175,8 @@ class TaskMessage {
         if (expires != null) 'expires': expires!.toUtc().toIso8601String(),
         if (chain != null && chain!.isNotEmpty) 'chain': chain,
         if (chord != null) 'chord': chord,
+        if (requeues != 0) 'requeues': requeues,
+        if (deadLetter != null) 'dead_letter': deadLetter,
       };
 
   factory TaskMessage.fromJson(Map<String, Object?> json) {
@@ -178,6 +198,8 @@ class TaskMessage {
           ?.map((e) => (e as Map).cast<String, Object?>())
           .toList(),
       chord: (json['chord'] as Map?)?.cast<String, Object?>(),
+      requeues: (json['requeues'] as num?)?.toInt() ?? 0,
+      deadLetter: (json['dead_letter'] as Map?)?.cast<String, Object?>(),
     );
   }
 

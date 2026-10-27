@@ -30,6 +30,18 @@ class TaskContext {
   })  : startedAt = startedAt ?? DateTime.now(),
         _isRevokedCheck = isRevokedCheck;
 
+  bool _abandoned = false;
+
+  /// Whether the worker stopped waiting for this run because it passed the
+  /// task's hard [Task.timeLimit]. The run has already been recorded as
+  /// failed (or retried); anything it returns from now on is discarded.
+  /// Long-running handlers should poll this and return early, since the
+  /// worker keeps this run's concurrency slot busy until the handler ends.
+  bool get isAbandoned => _abandoned;
+
+  /// Called by the worker when [Task.timeLimit] passes.
+  void markAbandoned() => _abandoned = true;
+
   /// Unique id of this invocation (matches the [AsyncResult] id).
   final String id;
 

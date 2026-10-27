@@ -113,23 +113,32 @@ class RedisBeatLock implements BeatLock {
         final result =
             await cmd.send_object(<Object>['SET', _key, owner, 'NX', 'PX', ms]);
         if (result != null && '$result'.toUpperCase() == 'OK') return true;
-        // Not a fresh acquire — check whether we already own it, and if so
-        // extend the TTL rather than losing leadership between ticks.
-        final current = await cmd.send_object(<Object>['GET', _key]);
-        if (current != null && current.toString() == owner) {
-          await cmd.send_object(<Object>['PEXPIRE', _key, ms]);
-          return true;
-        }
-        return false;
+        // Not a fresh acquire: extend the TTL if we still own it. Checked and
+        // extended in one script, so a lock that expired and was taken by
+        // another instance between the two steps is never extended.
+        final renewed = await cmd
+            .send_object(<Object>['EVAL', _renewScript, '1', _key, owner, ms]);
+        return '$renewed' == '1';
       });
 
   @override
   Future<void> release(String owner) => _withCommand((cmd) async {
-        final current = await cmd.send_object(<Object>['GET', _key]);
-        if (current != null && current.toString() == owner) {
-          await cmd.send_object(<Object>['DEL', _key]);
-        }
+        // Delete only our own lock, atomically (see acquire).
+        await cmd
+            .send_object(<Object>['EVAL', _releaseScript, '1', _key, owner]);
       });
+
+  static const _renewScript = '''
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return 0''';
+
+  static const _releaseScript = '''
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0''';
 
   @override
   Future<void> close() async {
