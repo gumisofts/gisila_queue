@@ -223,6 +223,40 @@ void main() {
       await broker.ack(msg);
     });
 
+    test('a long delay does not hold up a short one (Q-05)', () async {
+      if (!reachable) return;
+      final now = DateTime.now();
+      await broker.enqueue(TaskMessage(
+          id: 'hour',
+          task: 't',
+          queue: 'eta2',
+          eta: now.add(const Duration(hours: 1))));
+      await broker.enqueue(TaskMessage(
+          id: 'soon',
+          task: 't',
+          queue: 'eta2',
+          eta: now.add(const Duration(milliseconds: 700))));
+
+      final msg =
+          await broker.reserve(['eta2'], timeout: const Duration(seconds: 5));
+      expect(msg?.id, 'soon');
+      await broker.ack(msg!);
+    });
+
+    test('a delay spanning several buckets arrives on time, not early',
+        () async {
+      if (!reachable) return;
+      final eta = DateTime.now().add(const Duration(milliseconds: 1700));
+      await broker.enqueue(
+          TaskMessage(id: 'multi', task: 't', queue: 'eta3', eta: eta));
+      final msg =
+          await broker.reserve(['eta3'], timeout: const Duration(seconds: 6));
+      expect(msg?.id, 'multi');
+      final early = eta.difference(DateTime.now()).inMilliseconds;
+      expect(early, lessThan(RabbitBroker.minDelayBucketMs));
+      await broker.ack(msg!);
+    });
+
     test('unacked message is redelivered after broker close', () async {
       if (!reachable) return;
       await broker.enqueue(

@@ -28,7 +28,13 @@ class Worker {
     this.reserveTimeout = const Duration(seconds: 5),
     String? id,
     this.heartbeatInterval = const Duration(seconds: 10),
+    this.deadLetterQueue = defaultDeadLetterQueue,
+    this.maxRequeues = 10,
+    this.maxRedeliveries = 5,
   }) : id = id ?? '${_hostname()}:$pid';
+
+  /// Default [deadLetterQueue].
+  static const defaultDeadLetterQueue = 'dead_letter';
 
   final GisilaQueue app;
 
@@ -47,6 +53,24 @@ class Worker {
 
   /// How often a [QueueEventType.workerHeartbeat] is emitted while running.
   final Duration heartbeatInterval;
+
+  /// Where messages that failed for good are put: failures after their
+  /// last retry, unknown task names, and messages past [maxRequeues] or
+  /// [maxRedeliveries]. Each carries [TaskMessage.deadLetter] with the
+  /// reason; [GisilaQueue.replayDeadLetters] sends them back. Don't list
+  /// this queue in [queues]. Null turns dead-lettering off (failures then
+  /// only live in the result backend).
+  final String? deadLetterQueue;
+
+  /// How often a message may be put back with `RejectTask(requeue: true)`
+  /// before it is dead-lettered instead.
+  final int maxRequeues;
+
+  /// How often a broker may redeliver a message whose worker never acked it
+  /// (it crashed, or the process was killed) before it is dead-lettered
+  /// instead of run again: a message that keeps taking workers down with
+  /// it should stop doing so.
+  final int maxRedeliveries;
 
   /// Invoked after each successful task.
   TaskObserver? onSuccess;
@@ -69,6 +93,8 @@ class Worker {
   int _rateLimited = 0;
   int _expired = 0;
   int _revoked = 0;
+  int _deadLettered = 0;
+  int _abandoned = 0;
 
   // One sliding-window limiter per rate-limited task name, shared by every
   // concurrency slot in this worker process (matches Celery's per-worker,
@@ -182,6 +208,8 @@ class Worker {
         'rate_limited': _rateLimited,
         'expired': _expired,
         'revoked': _revoked,
+        'dead_lettered': _deadLettered,
+        'abandoned': _abandoned,
         'paused_queues': _pausedQueues.toList(),
       },
     ));
@@ -211,12 +239,25 @@ class Worker {
 
   /// Signals every consumer loop to stop after its current task and waits
   /// for them to drain.
-  Future<void> stop() async {
+  ///
+  /// With [timeout], gives up waiting after that long: tasks still running
+  /// are left unacked, so a broker with a visibility timeout hands them to
+  /// another worker.
+  Future<void> stop({Duration? timeout}) async {
     if (!_running) return;
     _running = false;
     _heartbeat?.cancel();
     _heartbeat = null;
-    await Future.wait(_loops);
+    final drained = Future.wait(_loops);
+    if (timeout == null) {
+      await drained;
+    } else {
+      await drained.timeout(timeout, onTimeout: () {
+        app.logger.warning('worker $id: $_active task(s) still running '
+            'after ${timeout.inSeconds}s; stopping without them');
+        return const [];
+      });
+    }
     _loops.clear();
     await _controlSub?.cancel();
     _controlSub = null;
@@ -318,6 +359,24 @@ class Worker {
       _failed++;
       await _emitTask(QueueEventType.taskFailed, message,
           fields: {'error': err});
+      await _deadLetter(message, err);
+      await app.broker.ack(message);
+      return;
+    }
+
+    if (message.redeliveries > maxRedeliveries) {
+      final err = 'redelivered ${message.redeliveries} times without being '
+          'acked (limit $maxRedeliveries)';
+      app.logger.error('task ${message.task} ✗ $err id=${message.id}');
+      await _record(
+        message,
+        StoredResult(
+            state: TaskState.failure, error: err, updatedAt: DateTime.now()),
+      );
+      _failed++;
+      await _emitTask(QueueEventType.taskFailed, message,
+          fields: {'error': err});
+      await _deadLetter(message, err);
       await app.broker.ack(message);
       return;
     }
@@ -383,8 +442,9 @@ class Worker {
     await _emitTask(QueueEventType.taskStarted, message);
 
     final sw = Stopwatch()..start();
+    Future<void>? stillRunning;
     try {
-      final value = await _runHandler(task, ctx);
+      final value = await _runHandler(task, ctx, (f) => stillRunning = f);
       final result = StoredResult(
         state: TaskState.success,
         result: value,
@@ -404,8 +464,23 @@ class Worker {
     } on RejectTask catch (r) {
       app.logger.warning('task ${message.task} rejected id=${message.id}'
           '${r.requeue ? ' (requeued)' : ''}');
-      if (r.requeue) {
-        await app.broker.enqueue(message);
+      if (r.requeue && message.requeues >= maxRequeues) {
+        final err = 'requeued ${message.requeues} times (limit $maxRequeues)'
+            '${r.message.isEmpty ? '' : ': ${r.message}'}';
+        final result = StoredResult(
+          state: TaskState.failure,
+          error: err,
+          updatedAt: DateTime.now(),
+        );
+        await _record(message, result);
+        _failed++;
+        await _emitTask(QueueEventType.taskFailed, message,
+            fields: {'error': err});
+        onFailure?.call(message, result);
+        await _deadLetter(message, err);
+      } else if (r.requeue) {
+        await app.broker
+            .enqueue(message.copyWith(requeues: message.requeues + 1));
         await _emitTask(QueueEventType.taskRetried, message,
             fields: {'requeued': true});
       } else {
@@ -438,35 +513,97 @@ class Worker {
         onFailure?.call(message, result);
         app.logger.error('task ${message.task} ✗ id=${message.id}',
             error: e, stack: st);
+        await _deadLetter(message, e.toString());
       }
     } finally {
       _active--;
       await app.broker.ack(message);
+    }
+    final running = stillRunning;
+    if (running != null) {
+      await _holdSlotWhile(message, running, task.timeLimit!);
+    }
+  }
+
+  /// Keeps the calling slot busy until an abandoned handler ([running])
+  /// really ends, so handlers past their time limit count against
+  /// [concurrency] instead of piling up. Warns every [limit] while it lasts,
+  /// and gives up waiting when the worker stops.
+  Future<void> _holdSlotWhile(
+      TaskMessage message, Future<void> running, Duration limit) async {
+    _abandoned++;
+    try {
+      var waited = limit;
+      while (true) {
+        final ended = await running
+            .then((_) => true)
+            .timeout(limit, onTimeout: () => false);
+        if (ended) return;
+        waited += limit;
+        app.logger.warning('task ${message.task} id=${message.id} still '
+            'running $waited after it started (time limit $limit); its '
+            'slot stays busy until it returns');
+        if (!_running) return;
+      }
+    } finally {
+      _abandoned--;
+    }
+  }
+
+  /// Puts [message] on [deadLetterQueue] with [reason]. Failing to do so is
+  /// logged, not thrown: the failure is already recorded.
+  Future<void> _deadLetter(TaskMessage message, String reason) async {
+    final queue = deadLetterQueue;
+    if (queue == null) return;
+    try {
+      await app.broker.enqueue(message.copyWith(
+        queue: queue,
+        clearEta: true,
+        deadLetter: {
+          'reason': reason,
+          'queue': message.deadLetter?['queue'] ?? message.queue,
+          'at': DateTime.now().toUtc().toIso8601String(),
+        },
+      ));
+      _deadLettered++;
+      app.logger.warning(
+          'task ${message.task} id=${message.id} dead-lettered to "$queue"');
+    } catch (e, st) {
+      app.logger.error(
+          'dead-lettering ${message.task} id=${message.id} '
+          'failed',
+          error: e,
+          stack: st);
     }
   }
 
   /// Runs [task]'s handler, honouring [Task.timeLimit] if set.
   ///
   /// Dart cannot forcibly preempt a running computation, so a time limit
-  /// only abandons the *wait* — it frees this slot for other work, but the
-  /// handler's code keeps running in the background. Any result or error it
-  /// produces after that point is discarded (via an attached no-op
-  /// listener) so it can't surface as an unhandled async error.
+  /// only abandons the *wait*: the run is reported as timed out, and
+  /// [onAbandoned] receives a future that completes when the handler really
+  /// ends (see [_holdSlotWhile]). Any result or error it produces after
+  /// that point is discarded (via an attached no-op listener) so it can't
+  /// surface as an unhandled async error.
   ///
   /// Important: do not use [Future.catchError] with `=> null` here. Handlers
   /// often return non-nullable types (`Future<bool>`), and a null error
   /// replacement violates that type and crashes the worker.
-  Future<Object?> _runHandler(Task task, TaskContext ctx) {
+  Future<Object?> _runHandler(
+    Task task,
+    TaskContext ctx,
+    void Function(Future<void> settled) onAbandoned,
+  ) {
     final limit = task.timeLimit;
     final future = task.handler(ctx);
     if (limit == null) return future;
-    unawaited(
-      future.then<void>(
-        (_) {},
-        onError: (Object _, StackTrace __) {},
-      ),
+    final settled = future.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
     );
     return future.timeout(limit, onTimeout: () {
+      ctx.markAbandoned();
+      onAbandoned(settled);
       throw TaskTimeLimitExceededException(ctx.id, limit);
     });
   }
@@ -512,6 +649,7 @@ class Worker {
       onFailure?.call(message, result);
       app.logger
           .error('task ${message.task} ✗ retries exhausted id=${message.id}');
+      await _deadLetter(message, err);
       return;
     }
     final delay = countdown ?? task.backoffFor(message.retries + 1);

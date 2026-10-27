@@ -8,17 +8,26 @@ import 'package:gisila_queue/gisila_queue.dart';
 import 'package:redis/redis.dart' as redis;
 import 'package:test/test.dart';
 
-/// These tests talk to a real Redis instance (default localhost:6379,
-/// override with GISILA_TEST_REDIS_HOST/PORT). They're tagged `redis` so
-/// they can be excluded (`dart test --exclude-tags redis`) wherever a
-/// broker isn't available; if the initial connectivity check fails, each
-/// test skips itself instead of failing the run.
+/// These tests talk to a real Redis instance at GISILA_TEST_REDIS_HOST
+/// (default localhost) and GISILA_TEST_REDIS_PORT. There is no default port:
+/// a developer's own Redis on 6379 must never be used by accident. They're
+/// tagged `redis` so they can be excluded (`dart test --exclude-tags
+/// redis`); without the port, or if the connectivity check fails, each test
+/// skips itself instead of failing the run.
 String get _host =>
     Platform.environment['GISILA_TEST_REDIS_HOST'] ?? 'localhost';
-int get _port =>
-    int.tryParse(Platform.environment['GISILA_TEST_REDIS_PORT'] ?? '') ?? 6379;
+int? get _configuredPort =>
+    int.tryParse(Platform.environment['GISILA_TEST_REDIS_PORT'] ?? '');
+int get _port => _configuredPort!;
+
+/// Skips every group when no port is configured, so no setUp or tearDown
+/// ever connects to a Redis nobody asked for.
+final Object _skip = _configuredPort == null
+    ? 'set GISILA_TEST_REDIS_PORT to run the Redis integration tests'
+    : false;
 
 Future<bool> _redisReachable() async {
+  if (_configuredPort == null) return false;
   try {
     final conn = redis.RedisConnection();
     final cmd = await conn.connect(_host, _port).timeout(
@@ -35,6 +44,7 @@ Future<bool> _redisReachable() async {
 /// Deletes every key under `prefix:*` — scoped cleanup, never a blanket
 /// FLUSHDB, since this may be a shared Redis instance.
 Future<void> _cleanupPrefix(String prefix) async {
+  if (_configuredPort == null) return;
   final conn = redis.RedisConnection();
   try {
     final cmd = await conn.connect(_host, _port);
@@ -78,12 +88,15 @@ void main() {
     reachable = await _redisReachable();
     if (!reachable) {
       // ignore: avoid_print
-      print('!! Redis not reachable at $_host:$_port — redis_integration_test '
-          'will skip every case.');
+      print(_configuredPort == null
+          ? '!! GISILA_TEST_REDIS_PORT is not set — redis_integration_test '
+              'will skip every case.'
+          : '!! Redis not reachable at $_host:$_port — '
+              'redis_integration_test will skip every case.');
     }
   });
 
-  group('RedisBroker reliability', () {
+  group('RedisBroker reliability', skip: _skip, () {
     late String prefix;
     late RedisBroker broker;
 
@@ -259,7 +272,7 @@ void main() {
     });
   });
 
-  group('RedisResultBackend reliability', () {
+  group('RedisResultBackend reliability', skip: _skip, () {
     late String prefix;
     late RedisResultBackend backend;
 
@@ -297,7 +310,7 @@ void main() {
     });
   });
 
-  group('RedisResultBackend chord barrier', () {
+  group('RedisResultBackend chord barrier', skip: _skip, () {
     late String prefix;
     late RedisResultBackend backend;
 
@@ -336,7 +349,7 @@ void main() {
     });
   });
 
-  group('RedisControlChannel', () {
+  group('RedisControlChannel', skip: _skip, () {
     late String prefix;
 
     setUp(() {
@@ -373,7 +386,7 @@ void main() {
     });
   });
 
-  group('RedisBeatLock', () {
+  group('RedisBeatLock', skip: _skip, () {
     late String prefix;
 
     setUp(() {
@@ -400,9 +413,30 @@ void main() {
       await lockA.close();
       await lockB.close();
     });
+
+    test('renew and release only touch the caller\'s own lock', () async {
+      if (!reachable) return;
+      final lockA = RedisBeatLock(host: _host, port: _port, prefix: prefix);
+      final lockB = RedisBeatLock(host: _host, port: _port, prefix: prefix);
+
+      expect(
+          await lockA.acquire('A', const Duration(milliseconds: 100)), isTrue);
+      await lockB.release('B'); // not B's: must not delete A's lock
+      expect(await lockB.acquire('B', const Duration(seconds: 5)), isFalse);
+
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(await lockB.acquire('B', const Duration(seconds: 5)), isTrue);
+      // A's lock expired and B holds it now: A can neither renew nor free it.
+      expect(await lockA.acquire('A', const Duration(seconds: 5)), isFalse);
+      await lockA.release('A');
+      expect(await lockA.acquire('A', const Duration(seconds: 5)), isFalse);
+
+      await lockA.close();
+      await lockB.close();
+    });
   });
 
-  group('Beat with RedisBeatLock + RedisBeatStateStore', () {
+  group('Beat with RedisBeatLock + RedisBeatStateStore', skip: _skip, () {
     late String prefix;
 
     setUp(() {

@@ -74,6 +74,7 @@ class Beat {
   bool _running = false;
   bool _isLeader = false;
   bool _stateLoaded = false;
+  bool _ticking = false;
 
   static String _hostname() {
     try {
@@ -108,9 +109,11 @@ class Beat {
     ));
   }
 
+  /// Brings each entry's [BeatEntry.lastRun] up to the persisted value.
+  /// Run once at startup and again whenever this instance (re)gains
+  /// leadership: while it stood by, the leader kept firing and persisting,
+  /// so its own last-run times are stale and would refire everything.
   Future<void> _loadPersistedState() async {
-    if (_stateLoaded) return;
-    _stateLoaded = true;
     for (final entry in _entries) {
       final persisted = await stateStore.getLastRun(entry.name);
       if (persisted != null &&
@@ -118,6 +121,7 @@ class Beat {
         entry.lastRun = persisted;
       }
     }
+    _stateLoaded = true;
   }
 
   /// Attempts to become (or remain) leader. Returns whether this instance
@@ -136,8 +140,20 @@ class Beat {
   /// separately from [run] so tests can drive ticks deterministically.
   /// A no-op whenever another instance currently holds [lock].
   Future<void> tick([DateTime? at]) async {
-    await _loadPersistedState();
+    // A slow tick (Redis latency, a slow send) must not overlap the next.
+    if (_ticking) return;
+    _ticking = true;
+    try {
+      await _tick(at);
+    } finally {
+      _ticking = false;
+    }
+  }
+
+  Future<void> _tick(DateTime? at) async {
+    final wasLeader = _isLeader;
     if (!await _ensureLeadership()) return;
+    if (!wasLeader || !_stateLoaded) await _loadPersistedState();
     final now = at ?? DateTime.now();
     for (final entry in _entries) {
       if (!entry.schedule.isDue(entry.lastRun, now)) continue;

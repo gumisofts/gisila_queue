@@ -104,4 +104,22 @@ abstract class ResultBackend {
     _chordArrivals.remove(chordId);
     return true;
   }
+
+  // ── Idempotency keys ──────────────────────────────────────────────────
+
+  final Map<String, (String, DateTime)> _claims = {};
+
+  /// Claims [key] for [taskId] for [ttl]. Returns null when the claim was
+  /// made, or the id that already holds [key]. Backs
+  /// `GisilaQueue.send(dedupeKey:)`. The default keeps claims in this
+  /// instance (right for a single process); [RedisResultBackend] makes them
+  /// shared and atomic.
+  Future<String?> claimKey(String key, String taskId, Duration ttl) async {
+    final now = DateTime.now();
+    _claims.removeWhere((_, v) => !v.$2.isAfter(now));
+    final held = _claims[key];
+    if (held != null) return held.$1;
+    _claims[key] = (taskId, now.add(ttl));
+    return null;
+  }
 }

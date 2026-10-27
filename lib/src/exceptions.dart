@@ -49,12 +49,13 @@ class RejectTask extends GisilaQueueException {
 /// configured hard [Task.timeLimit].
 ///
 /// Dart offers no way to forcibly preempt a running computation within a
-/// single isolate, so this does not stop the handler's work — it only
-/// abandons the worker's wait for it, freeing the concurrency slot for
-/// other tasks. Any value or error the abandoned computation produces
-/// afterwards is discarded. For handlers that must be interruptible, poll
-/// [TaskContext.softTimeLimitExceeded] (backed by [Task.softTimeLimit]) and
-/// wind down cooperatively instead of relying on this.
+/// single isolate, so this does not stop the handler's work. The run is
+/// recorded as timed out (and retried or failed as usual), but its
+/// concurrency slot stays busy until the handler actually returns, so
+/// runaway handlers cannot pile up beyond the worker's concurrency. Any
+/// value or error the abandoned computation produces is discarded. Poll
+/// [TaskContext.isAbandoned] or [TaskContext.softTimeLimitExceeded] in long
+/// handlers to wind down cooperatively.
 class TaskTimeLimitExceededException extends GisilaQueueException {
   const TaskTimeLimitExceededException(this.taskId, this.limit)
       : super('exceeded time limit of $limit');

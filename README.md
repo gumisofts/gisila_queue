@@ -18,8 +18,9 @@ reusable library.
   multi-host clusters, `InMemoryBroker` for tests and single-process apps.
   Both distributed brokers give **at-least-once delivery** (Redis via an
   unacked ledger + visibility-timeout reaper; RabbitMQ via manual AMQP ack /
-  requeue on crash). ETA/countdown on RabbitMQ uses per-message TTL + a
-  dead-letter exchange (no plugin required).
+  requeue on crash). ETA/countdown on RabbitMQ uses delay-bucket queues
+  (fixed TTLs, 100 ms × 2ⁿ) + a dead-letter exchange, so long delays never
+  hold up short ones (no plugin required).
 - **Pluggable result backend** — `RedisResultBackend` (TTL'd) or
   `InMemoryResultBackend` (bounded via `maxEntries`/`ttl`); omit it entirely
   for fire-and-forget.
@@ -173,7 +174,24 @@ app.task<void>(
 
 Set `autoRetry: true` to retry on *any* uncaught exception while attempts
 remain. Throw `RejectTask(requeue: true)` to put a message back without
-counting a retry, or `RejectTask()` to drop it.
+counting a retry (at most `maxRequeues` times, 10 by default), or
+`RejectTask()` to drop it.
+
+### Dead letters
+
+A message that fails for good goes to the `dead_letter` queue with the
+reason in `message.deadLetter`. That covers a failure after the last retry,
+an unknown task name, too many requeues, and a message redelivered more than
+`maxRedeliveries` times (5 by default) because the worker holding it kept
+dying. Once the cause is fixed, send them back to the queues they came from:
+
+```dart
+final moved = await app.replayDeadLetters(); // up to 100 at a time
+```
+
+Configure it per worker with `app.worker(deadLetterQueue: ..., maxRequeues:
+..., maxRedeliveries: ...)`; `deadLetterQueue: null` turns it off. Don't
+consume the dead-letter queue with a normal worker.
 
 ## Execution safety (time limits, rate limits, expiration)
 
@@ -194,10 +212,27 @@ await add.applyAsync(args: [2, 3], expiresIn: const Duration(minutes: 1));
 ```
 
 `timeLimit` cancels the worker's *await*, not the underlying computation —
-Dart can't preempt a running, non-yielding handler within one isolate.
-`softTimeLimit` is purely cooperative: poll `ctx.softTimeLimitExceeded` in
-long-running/looping handlers and wind down early instead. A task past its
+Dart can't preempt a running, non-yielding handler within one isolate. The
+run is recorded as timed out (and retried or failed) right away, but its
+concurrency slot stays busy until the handler really returns, so runaway
+handlers can't pile up past `concurrency`; the worker logs a warning each
+`timeLimit` while one keeps going. Poll `ctx.isAbandoned` to stop early once
+the limit has passed. `softTimeLimit` is purely cooperative: poll
+`ctx.softTimeLimitExceeded` in long-running/looping handlers and wind down
+early instead. A task past its
 `expires` is recorded as `TaskState.revoked` instead of running.
+
+## Cron schedules and deduplication
+
+```dart
+beat.schedule('reports', 'reports.render',
+    Schedule.cron('0 6 * * 1-5')); // 06:00 on weekdays
+
+// Clicking "pay" twice enqueues one charge: the second send returns the
+// first task's id.
+await app.send<void>('billing.charge',
+    args: [orderId], dedupeKey: 'order-$orderId');
+```
 
 ## Workflow primitives (chain, group, chord)
 

@@ -28,7 +28,8 @@ import 'shutdown.dart';
 /// Recognized flags: `--queues=a,b` (default: `default`),
 /// `--concurrency=N` (default: 1), `--redis-host=H` (default: localhost),
 /// `--redis-port=P` (default: 6379), `--prefix=P` (default: gq),
-/// `--loglevel=debug|info|warning|error` (default: info), `--help`/`-h`.
+/// `--loglevel=debug|info|warning|error` (default: info),
+/// `--drain-timeout=SECONDS` (default: 30), `--help`/`-h`.
 class WorkerCli {
   WorkerCli._(
     this.args, {
@@ -39,6 +40,7 @@ class WorkerCli {
     required this.queues,
     required this.concurrency,
     required this.logLevel,
+    required this.drainTimeout,
   });
 
   final CliArgs args;
@@ -52,6 +54,9 @@ class WorkerCli {
   final int concurrency;
   final LogLevel logLevel;
 
+  /// How long a shutdown waits for running tasks before exiting anyway.
+  final Duration drainTimeout;
+
   factory WorkerCli.parse(List<String> argv) {
     final args = CliArgs.parse(argv);
     final redis = args.redisTarget();
@@ -64,6 +69,7 @@ class WorkerCli {
       queues: args.stringList('queues') ?? const ['default'],
       concurrency: args.intOr('concurrency', 1),
       logLevel: _parseLogLevel(args.string('loglevel')),
+      drainTimeout: Duration(seconds: args.intOr('drain-timeout', 30)),
     );
   }
 
@@ -75,7 +81,7 @@ gisila_queue worker CLI
   dart run bin/worker.dart [--queues=default] [--concurrency=1]
       [--redis-url=redis://:PASS@host:6379/0 | --redis-host=localhost
        --redis-port=6379] [--prefix=gq]
-      [--loglevel=info]
+      [--loglevel=info] [--drain-timeout=30]
 ''';
 
   /// Builds a Redis-backed [GisilaQueue] from the parsed flags. Register
@@ -108,7 +114,7 @@ gisila_queue worker CLI
     final worker = app.worker(queues: queues, concurrency: concurrency);
     installShutdownHooks(() async {
       stdout.writeln('\nworker ${worker.id} shutting down…');
-      await worker.stop();
+      await worker.stop(timeout: drainTimeout);
     });
     stdout.writeln('worker ${worker.id} → queues=${queues.join(',')} '
         'concurrency=$concurrency (redis $redisHost:$redisPort, prefix "$prefix")');
