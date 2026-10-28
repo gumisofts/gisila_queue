@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 — 2026-10-28 (BREAKING)
+
+- **Apps sharing a Redis or RabbitMQ no longer interfere by accident
+  (Q-12).** Every key, queue and channel was already under a `prefix`, but
+  each component took its own and all defaulted to `gq`, so two apps on one
+  Redis database took each other's tasks and only one of their beats ran.
+  - `GisilaQueue.redis(namespace: 'myapp', ...)` builds the broker, result
+    backend, control channel, event sink (`events: true`), beat lock and
+    beat state store with one namespace; `Beat(app)` uses that lock and
+    state store when given none.
+  - Breaking: `GisilaQueue(...)` and `Beat(...)` throw `ArgumentError` when
+    their components use different prefixes (they used to split the app
+    silently). New `Namespaced` interface, implemented by every Redis and
+    RabbitMQ component; `app.namespace` and `beat.namespace` report the
+    shared prefix.
+  - A worker or beat on the default `gq` namespace logs a warning.
+  - Behaviour change: a worker that receives a task name it doesn't know
+    puts the message back with a delay (`unknownTaskBackoff`, 1 s doubling
+    up to a minute) and dead-letters it only after `maxRequeues` (10), so
+    the worker that has the task can still run it. It used to fail and
+    dead-letter it at once, also writing a failure into the shared result
+    backend.
+  - The worker, beat, inspect and Rose CLIs take `--namespace` (`--prefix`
+    still works).
+
 ## 0.2.0 — 2026-10-28 (BREAKING)
 
 - `Schedule.cron('*/15 9-17 * * 1-5')`: 5-field cron schedules for Beat.

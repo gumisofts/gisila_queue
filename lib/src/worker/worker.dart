@@ -8,6 +8,7 @@ import '../control.dart';
 import '../events/event.dart';
 import '../exceptions.dart';
 import '../message.dart';
+import '../namespace.dart';
 import '../rate_limit.dart';
 import '../task.dart';
 import '../task_state.dart';
@@ -31,6 +32,7 @@ class Worker {
     this.deadLetterQueue = defaultDeadLetterQueue,
     this.maxRequeues = 10,
     this.maxRedeliveries = 5,
+    this.unknownTaskBackoff = const Duration(seconds: 1),
   }) : id = id ?? '${_hostname()}:$pid';
 
   /// Default [deadLetterQueue].
@@ -55,16 +57,24 @@ class Worker {
   final Duration heartbeatInterval;
 
   /// Where messages that failed for good are put: failures after their
-  /// last retry, unknown task names, and messages past [maxRequeues] or
+  /// last retry, task names no worker knew after [maxRequeues] tries, and
+  /// messages past [maxRequeues] or
   /// [maxRedeliveries]. Each carries [TaskMessage.deadLetter] with the
   /// reason; [GisilaQueue.replayDeadLetters] sends them back. Don't list
   /// this queue in [queues]. Null turns dead-lettering off (failures then
   /// only live in the result backend).
   final String? deadLetterQueue;
 
-  /// How often a message may be put back with `RejectTask(requeue: true)`
-  /// before it is dead-lettered instead.
+  /// How often a message may be put back with `RejectTask(requeue: true)`,
+  /// or for an unknown task name, before it is dead-lettered instead.
   final int maxRequeues;
+
+  /// First delay before a message whose task name this worker doesn't know
+  /// is offered again; it doubles on each requeue, up to a minute. The
+  /// message may belong to a worker that registers the task (a newer
+  /// deploy, or another app misconfigured onto this namespace), so it is
+  /// put back instead of failed, and dead-lettered only after [maxRequeues].
+  final Duration unknownTaskBackoff;
 
   /// How often a broker may redeliver a message whose worker never acked it
   /// (it crashed, or the process was killed) before it is dead-lettered
@@ -131,6 +141,9 @@ class Worker {
     _running = true;
     app.logger.info(
         'worker started: queues=${queues.join(',')} concurrency=$concurrency');
+    if (app.namespace == defaultNamespace) {
+      app.logger.warning(defaultNamespaceWarning('worker $id'));
+    }
     _controlSub = app.controlChannel.subscribe().listen(
           _handleControlMessage,
           onError: (Object e, StackTrace st) =>
@@ -345,9 +358,23 @@ class Worker {
       'kwargs': message.kwargs,
     });
     final task = app.lookup(message.task);
+    if (task == null && message.requeues < maxRequeues) {
+      final delay = _unknownTaskDelay(message.requeues);
+      app.logger.warning('unknown task "${message.task}" id=${message.id}: '
+          'put back for ${delay.inMilliseconds}ms '
+          '(${message.requeues + 1}/$maxRequeues); is it registered, and is '
+          'this worker on the right namespace?');
+      await app.broker.enqueue(message.copyWith(
+          requeues: message.requeues + 1, eta: DateTime.now().add(delay)));
+      await app.broker.ack(message);
+      await _emitTask(QueueEventType.taskRetried, message,
+          fields: {'requeued': true, 'unknown_task': true});
+      return;
+    }
     if (task == null) {
-      app.logger.error('unknown task "${message.task}" id=${message.id}');
-      final err = 'unknown task "${message.task}"';
+      final err = 'unknown task "${message.task}": no worker ran it after '
+          '${message.requeues} requeues';
+      app.logger.error('$err id=${message.id}');
       await _record(
         message,
         StoredResult(
@@ -552,6 +579,12 @@ class Worker {
 
   /// Puts [message] on [deadLetterQueue] with [reason]. Failing to do so is
   /// logged, not thrown: the failure is already recorded.
+  Duration _unknownTaskDelay(int requeues) {
+    const cap = Duration(minutes: 1);
+    final ms = unknownTaskBackoff.inMilliseconds << requeues.clamp(0, 20);
+    return ms >= cap.inMilliseconds ? cap : Duration(milliseconds: ms);
+  }
+
   Future<void> _deadLetter(TaskMessage message, String reason) async {
     final queue = deadLetterQueue;
     if (queue == null) return;

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:redis/redis.dart';
 
+import 'namespace.dart';
 import 'redis_options.dart';
 
 /// The kind of instruction a [ControlChannel] carries between producers and
@@ -127,12 +128,12 @@ class InMemoryControlChannel implements ControlChannel {
 /// Distributed [ControlChannel] over Redis pub/sub (channel
 /// `<prefix>:control`), reaching every worker process subscribed at the
 /// time a message is published.
-class RedisControlChannel implements ControlChannel {
+class RedisControlChannel implements ControlChannel, Namespaced {
   RedisControlChannel({
     this.host = 'localhost',
     this.port = 6379,
     this.options = const RedisOptions(),
-    this.prefix = 'gq',
+    this.prefix = defaultNamespace,
   });
 
   final String host;
@@ -140,6 +141,7 @@ class RedisControlChannel implements ControlChannel {
 
   /// Password, TLS and database; see [RedisOptions].
   final RedisOptions options;
+  @override
   final String prefix;
 
   String get _channel => '$prefix:control';

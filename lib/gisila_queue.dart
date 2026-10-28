@@ -47,6 +47,7 @@ export 'src/events/redis_event_sink.dart';
 export 'src/exceptions.dart';
 export 'src/logging.dart';
 export 'src/message.dart';
+export 'src/namespace.dart';
 export 'src/rate_limit.dart';
 export 'src/redis_options.dart';
 export 'src/result.dart';
