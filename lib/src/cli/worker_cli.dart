@@ -66,8 +66,8 @@ class WorkerCli {
       redisHost: redis.host,
       redisPort: redis.port,
       redisOptions: redis.options,
-      prefix: args.string('namespace') ??
-          args.stringOr('prefix', defaultNamespace),
+      prefix:
+          args.string('namespace') ?? args.stringOr('prefix', defaultNamespace),
       queues: args.stringList('queues') ?? const ['default'],
       concurrency: args.intOr('concurrency', 1),
       logLevel: _parseLogLevel(args.string('loglevel')),

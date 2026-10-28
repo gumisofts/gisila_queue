@@ -527,10 +527,7 @@ void main() {
     test('each app runs only its own tasks and its own beat', () async {
       if (!reachable) return;
       GisilaQueue build(String ns) => GisilaQueue.redis(
-          namespace: ns,
-          host: _host,
-          port: _port,
-          logger: SilentQueueLogger());
+          namespace: ns, host: _host, port: _port, logger: SilentQueueLogger());
       final appA = build(a);
       final appB = build(b);
       final ranBy = <String, List<String>>{a: [], b: []};
@@ -543,12 +540,10 @@ void main() {
         ranBy[b]!.add(ctx.id);
         return 'from B';
       });
-      final workerA = appA.worker(
-          reserveTimeout: const Duration(milliseconds: 200))
-        ..run();
-      final workerB = appB.worker(
-          reserveTimeout: const Duration(milliseconds: 200))
-        ..run();
+      final workerA =
+          appA.worker(reserveTimeout: const Duration(milliseconds: 200))..run();
+      final workerB =
+          appB.worker(reserveTimeout: const Duration(milliseconds: 200))..run();
 
       final results = await Future.wait([
         for (var i = 0; i < 5; i++) ...[
