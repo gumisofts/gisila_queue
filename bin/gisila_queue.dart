@@ -11,7 +11,7 @@ import 'package:gisila_queue/gisila_queue_cli.dart';
 ///
 /// Options (all optional): `--redis-url=URL` (or `REDIS_URL`; see
 /// [RedisOptions.parseUrl]), `--redis-host=HOST` (default: localhost),
-/// `--redis-port=PORT` (default: 6379), `--prefix=PREFIX` (default: gq).
+/// `--redis-port=PORT` (default: 6379), `--namespace=NS` (alias `--prefix`; default: gq).
 Future<void> main(List<String> argv) async {
   if (argv.isEmpty || argv.first == '--help' || argv.first == '-h') {
     stdout.writeln(_usage);
@@ -24,7 +24,7 @@ Future<void> main(List<String> argv) async {
   final redis = args.redisTarget();
   final host = redis.host;
   final port = redis.port;
-  final prefix = args.stringOr('prefix', 'gq');
+  final prefix = args.string('namespace') ?? args.stringOr('prefix', 'gq');
   final broker = RedisBroker(
       host: host, port: port, options: redis.options, prefix: prefix);
 
@@ -33,7 +33,7 @@ Future<void> main(List<String> argv) async {
       case 'inspect':
         final queues = args.stringList('queues') ?? const ['default'];
         stdout.writeln(
-            'gisila_queue inspect — redis $host:$port, prefix "$prefix"');
+            'gisila_queue inspect — redis $host:$port, namespace "$prefix"');
         for (final queue in queues) {
           final n = await broker.length(queue);
           stdout.writeln('  $queue: $n ready message(s)');
@@ -63,9 +63,9 @@ const _usage = '''
 gisila_queue — inspect/purge utility
 
   dart run gisila_queue:gisila_queue inspect [--queues=default,emails]
-      [--redis-url=URL | --redis-host=H --redis-port=P] [--prefix=gq]
+      [--redis-url=URL | --redis-host=H --redis-port=P] [--namespace=gq]
   dart run gisila_queue:gisila_queue purge --queue=NAME
-      [--redis-url=URL | --redis-host=H --redis-port=P] [--prefix=gq]
+      [--redis-url=URL | --redis-host=H --redis-port=P] [--namespace=gq]
 
   --redis-url falls back to the REDIS_URL environment variable.
 ''';

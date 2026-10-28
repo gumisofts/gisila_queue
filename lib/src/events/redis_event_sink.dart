@@ -2,13 +2,15 @@ import 'dart:async';
 
 import 'package:redis/redis.dart';
 
+import '../namespace.dart';
 import '../redis_options.dart';
 
 import 'event.dart';
 import 'event_sink.dart';
 
 /// Shared key/channel naming for the Redis event transport.
-mixin _RedisEventKeys {
+mixin _RedisEventKeys implements Namespaced {
+  @override
   String get prefix;
 
   /// Pub/sub channel carrying the live event firehose.
@@ -35,7 +37,7 @@ class RedisEventSink with _RedisEventKeys implements QueueEventSink {
     this.host = 'localhost',
     this.port = 6379,
     this.options = const RedisOptions(),
-    this.prefix = 'gq',
+    this.prefix = defaultNamespace,
     this.historySize = 5000,
   });
 
@@ -102,7 +104,7 @@ class RedisEventSource with _RedisEventKeys implements QueueEventSource {
     this.host = 'localhost',
     this.port = 6379,
     this.options = const RedisOptions(),
-    this.prefix = 'gq',
+    this.prefix = defaultNamespace,
   });
 
   final String host;

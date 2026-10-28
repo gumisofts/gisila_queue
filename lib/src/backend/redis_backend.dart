@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:redis/redis.dart';
 
+import '../namespace.dart';
 import '../redis_options.dart';
 
 import 'result_backend.dart';
@@ -13,12 +14,12 @@ import 'result_backend.dart';
 /// The connection reconnects transparently and retries once if a call fails
 /// (e.g. after a Redis restart), instead of permanently wedging for the
 /// lifetime of this instance.
-class RedisResultBackend extends ResultBackend {
+class RedisResultBackend extends ResultBackend implements Namespaced {
   RedisResultBackend({
     this.host = 'localhost',
     this.port = 6379,
     this.options = const RedisOptions(),
-    this.prefix = 'gq',
+    this.prefix = defaultNamespace,
     this.resultTtl = const Duration(hours: 24),
   });
 
@@ -27,6 +28,7 @@ class RedisResultBackend extends ResultBackend {
 
   /// Password, TLS and database; see [RedisOptions].
   final RedisOptions options;
+  @override
   final String prefix;
 
   /// How long a stored result survives before Redis evicts it.

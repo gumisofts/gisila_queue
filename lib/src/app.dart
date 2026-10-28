@@ -1,15 +1,21 @@
 import 'package:uuid/uuid.dart';
 
+import 'backend/redis_backend.dart';
 import 'backend/result_backend.dart';
+import 'beat/coordination.dart';
 import 'broker/broker.dart';
+import 'broker/redis_broker.dart';
 import 'canvas.dart';
 import 'codec.dart';
 import 'control.dart';
 import 'events/event.dart';
 import 'events/event_sink.dart';
+import 'events/redis_event_sink.dart';
 import 'logging.dart';
 import 'message.dart';
+import 'namespace.dart';
 import 'rate_limit.dart';
+import 'redis_options.dart';
 import 'result.dart';
 import 'router.dart';
 import 'task.dart';
@@ -39,6 +45,11 @@ import 'worker/worker.dart';
 /// // worker process
 /// await app.worker().run();
 /// ```
+///
+/// Apps that share a Redis database or RabbitMQ vhost need their own
+/// namespace (every component's `prefix`); [GisilaQueue.redis] sets it once
+/// for all of them. The constructor throws [ArgumentError] when the
+/// components passed to it use different prefixes.
 class GisilaQueue {
   GisilaQueue({
     required this.broker,
@@ -49,10 +60,89 @@ class GisilaQueue {
     Uuid? idGenerator,
     ControlChannel? controlChannel,
     this.router,
+    this.beatLock,
+    this.beatStateStore,
   })  : events = events ?? const NoopEventSink(),
         logger = logger ?? ConsoleQueueLogger(),
         _uuid = idGenerator ?? const Uuid(),
-        controlChannel = controlChannel ?? const NoopControlChannel();
+        controlChannel = controlChannel ?? const NoopControlChannel(),
+        namespace = checkNamespaces({
+          'broker': broker,
+          'backend': backend,
+          'events': events,
+          'controlChannel': controlChannel,
+          'beatLock': beatLock,
+          'beatStateStore': beatStateStore,
+        });
+
+  /// A Redis-backed app whose broker, result backend, control channel,
+  /// event sink (with [events]), beat lock and beat state store all use
+  /// [namespace] as their prefix. Give each app on a shared Redis its own
+  /// [namespace]; workers, producers and beat of one app must agree on it.
+  factory GisilaQueue.redis({
+    required String namespace,
+    String host = 'localhost',
+    int port = 6379,
+    RedisOptions options = const RedisOptions(),
+    bool results = true,
+    bool control = true,
+    bool events = false,
+    Duration visibilityTimeout = const Duration(minutes: 5),
+    Duration resultTtl = const Duration(hours: 24),
+    String defaultQueue = 'default',
+    QueueLogger? logger,
+    Uuid? idGenerator,
+    Router? router,
+  }) {
+    if (namespace.isEmpty || namespace.contains(RegExp(r'\s'))) {
+      throw ArgumentError.value(
+          namespace, 'namespace', 'must be non-empty, without spaces');
+    }
+    return GisilaQueue(
+      broker: RedisBroker(
+          host: host,
+          port: port,
+          options: options,
+          prefix: namespace,
+          visibilityTimeout: visibilityTimeout),
+      backend: results
+          ? RedisResultBackend(
+              host: host,
+              port: port,
+              options: options,
+              prefix: namespace,
+              resultTtl: resultTtl)
+          : null,
+      controlChannel: control
+          ? RedisControlChannel(
+              host: host, port: port, options: options, prefix: namespace)
+          : null,
+      events: events
+          ? RedisEventSink(
+              host: host, port: port, options: options, prefix: namespace)
+          : null,
+      beatLock: RedisBeatLock(
+          host: host, port: port, options: options, prefix: namespace),
+      beatStateStore: RedisBeatStateStore(
+          host: host, port: port, options: options, prefix: namespace),
+      defaultQueue: defaultQueue,
+      logger: logger,
+      idGenerator: idGenerator,
+      router: router,
+    );
+  }
+
+  /// The prefix shared by this app's namespaced components (Redis or
+  /// RabbitMQ), or null when none is namespaced (e.g. all in-memory).
+  final String? namespace;
+
+  /// Lock a [Beat] built for this app uses when given none. Set by
+  /// [GisilaQueue.redis].
+  final BeatLock? beatLock;
+
+  /// State store a [Beat] built for this app uses when given none. Set by
+  /// [GisilaQueue.redis].
+  final BeatStateStore? beatStateStore;
 
   /// Transport used to move messages between producers and workers.
   final Broker broker;
@@ -273,7 +363,8 @@ class GisilaQueue {
   ///   `[defaultQueue]`.
   /// * [concurrency] — how many messages to process at once within this
   ///   process. Scale further by running more worker processes.
-  /// * [deadLetterQueue], [maxRequeues], [maxRedeliveries] — see [Worker].
+  /// * [deadLetterQueue], [maxRequeues], [maxRedeliveries],
+  ///   [unknownTaskBackoff] — see [Worker].
   Worker worker({
     List<String>? queues,
     int concurrency = 1,
@@ -282,6 +373,7 @@ class GisilaQueue {
     String? deadLetterQueue = Worker.defaultDeadLetterQueue,
     int maxRequeues = 10,
     int maxRedeliveries = 5,
+    Duration unknownTaskBackoff = const Duration(seconds: 1),
   }) {
     return Worker(
       this,
@@ -292,6 +384,7 @@ class GisilaQueue {
       deadLetterQueue: deadLetterQueue,
       maxRequeues: maxRequeues,
       maxRedeliveries: maxRedeliveries,
+      unknownTaskBackoff: unknownTaskBackoff,
     );
   }
 

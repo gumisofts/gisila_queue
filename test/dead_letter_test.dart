@@ -46,15 +46,18 @@ void main() {
       await app.close();
     });
 
-    test('an unknown task name is dead-lettered', () async {
+    test('an unknown task name is dead-lettered after maxRequeues', () async {
       final app = _app();
-      final worker = app.worker()..run();
+      final worker = app.worker(
+          maxRequeues: 2, unknownTaskBackoff: const Duration(milliseconds: 1))
+        ..run();
       await app.broker.enqueue(TaskMessage(
           id: 'x1', task: 'nobody.handles.this', queue: app.defaultQueue));
       final dead = await app.broker.reserve([Worker.defaultDeadLetterQueue],
           timeout: const Duration(seconds: 2));
       expect(dead?.id, 'x1');
       expect(dead!.deadLetter!['reason'], contains('unknown task'));
+      expect(dead.requeues, 2);
       await worker.stop();
       await app.close();
     });

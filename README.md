@@ -80,7 +80,7 @@ reusable library.
 
 ```yaml
 dependencies:
-  gisila_queue: ^0.2.0
+  gisila_queue: ^0.3.0
 ```
 
 ## Quick start
@@ -88,10 +88,8 @@ dependencies:
 ```dart
 import 'package:gisila_queue/gisila_queue.dart';
 
-final app = GisilaQueue(
-  broker: RedisBroker(host: 'localhost', port: 6379),
-  backend: RedisResultBackend(host: 'localhost', port: 6379),
-);
+// Broker, results, control channel and beat lock, all under one namespace.
+final app = GisilaQueue.redis(namespace: 'myapp', host: 'localhost');
 
 // Register tasks (in code shared by producers and workers).
 final add = app.task<int>(
@@ -101,17 +99,43 @@ final add = app.task<int>(
 );
 ```
 
-Redis with a password, TLS or another database: pass `options:` to every
-Redis component, or parse a URL once:
+Redis with a password, TLS or another database: pass `options:`, or parse a
+URL once:
 
 ```dart
 final redis = RedisOptions.parseUrl('rediss://app:s3cret@cache:6380/1');
-final app = GisilaQueue(
-  broker: RedisBroker(host: redis.host, port: redis.port, options: redis.options),
-  backend: RedisResultBackend(
-      host: redis.host, port: redis.port, options: redis.options),
-);
+final app = GisilaQueue.redis(
+    namespace: 'myapp',
+    host: redis.host,
+    port: redis.port,
+    options: redis.options);
 ```
+
+Building the components yourself (`GisilaQueue(broker: RedisBroker(...),
+...)`) still works; give each of them the same `prefix:`.
+
+### Several apps on one Redis or RabbitMQ
+
+Every key, queue and channel lives under the app's namespace (each
+component's `prefix`, `gq` by default). Two apps on the same Redis database
+or RabbitMQ vhost **must** use different namespaces. On a shared one, each
+app's workers take the other's tasks, only one of their beats runs (they
+share the beat lock), and dedupe keys and control broadcasts collide.
+
+* Use `GisilaQueue.redis(namespace: 'billing')`, or the same `prefix:` on
+  every component; the CLIs and Rose take `--namespace=billing`. Producers,
+  workers, beat and Rose of one app must all use the same one.
+* `GisilaQueue(...)` and `Beat(...)` throw `ArgumentError` when their
+  components use different prefixes, so a half-configured app fails at
+  startup instead of silently splitting.
+* A worker or beat on the default `gq` logs a warning at startup.
+* A worker that receives a task name it doesn't know puts the message back
+  with a growing delay (`unknownTaskBackoff`, 1 s doubling up to a minute)
+  instead of failing it, so another worker (a newer deploy, or the app it
+  belongs to) can run it. It is dead-lettered after `maxRequeues` (10) tries.
+
+A separate Redis database (`/1`, `/2` in the URL) or RabbitMQ vhost per app
+isolates them too.
 
 The bundled CLIs accept `--redis-url=…` and fall back to the `REDIS_URL`
 environment variable (better for passwords than the command line).
@@ -181,7 +205,8 @@ counting a retry (at most `maxRequeues` times, 10 by default), or
 
 A message that fails for good goes to the `dead_letter` queue with the
 reason in `message.deadLetter`. That covers a failure after the last retry,
-an unknown task name, too many requeues, and a message redelivered more than
+a task name no worker knew after `maxRequeues` tries, too many requeues, and
+a message redelivered more than
 `maxRedeliveries` times (5 by default) because the worker holding it kept
 dying. Once the cause is fixed, send them back to the queues they came from:
 
@@ -313,7 +338,7 @@ dart run gisila_queue:gisila_queue purge --queue=default
 ```
 
 `WorkerCli`/`BeatCli` (`package:gisila_queue/gisila_queue_cli.dart`) parse the
-standard `--redis-url` (or `REDIS_URL`), `--redis-host/port`, `--prefix`,
+standard `--redis-url` (or `REDIS_URL`), `--redis-host/port`, `--namespace`,
 `--loglevel` flags plus their own
 (`--queues`/`--concurrency` for workers; `--tick-interval`/`--lock-ttl` for
 beat, wiring a `RedisBeatLock` + `RedisBeatStateStore` automatically) and
@@ -322,10 +347,13 @@ install SIGINT/SIGTERM shutdown hooks that close every connection cleanly.
 ## Periodic tasks (beat)
 
 ```dart
+// With GisilaQueue.redis, Beat(app) already uses a RedisBeatLock (one active
+// leader) and a RedisBeatStateStore (survives a restart) in the app's
+// namespace. Otherwise pass them, with the app's prefix:
 final beat = Beat(
   app,
-  lock: RedisBeatLock(host: 'localhost'),           // only one active leader
-  stateStore: RedisBeatStateStore(host: 'localhost'), // survives a restart
+  lock: RedisBeatLock(host: 'localhost', prefix: 'myapp'),
+  stateStore: RedisBeatStateStore(host: 'localhost', prefix: 'myapp'),
 )
   ..schedule('nightly-report', 'reports.nightly',
       Schedule.dailyAt(2, minute: 30))
@@ -335,8 +363,9 @@ final beat = Beat(
 await beat.run(); // safe to start more than one process with a lock set
 ```
 
-Without `lock`/`stateStore` (the default), `Beat` behaves as before: assume a
-single instance, and a restart forgets `lastRun` for every entry.
+Without `lock`/`stateStore` (and not built with `GisilaQueue.redis`), `Beat`
+behaves as before: assume a single instance, and a restart forgets `lastRun`
+for every entry.
 
 ## Observability (GisilaRose)
 

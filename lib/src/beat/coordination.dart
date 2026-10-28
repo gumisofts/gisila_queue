@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:redis/redis.dart';
 
+import '../namespace.dart';
 import '../redis_options.dart';
 
 /// A distributed mutex a [Beat] holds while it's the active scheduler.
@@ -49,12 +50,12 @@ class NoopBeatLock implements BeatLock {
 /// periodic-task firing (the failure mode is "briefly no leader" or, in the
 /// rarest case, "two leaders for one tick"), not a correctness-critical
 /// distributed lock.
-class RedisBeatLock implements BeatLock {
+class RedisBeatLock implements BeatLock, Namespaced {
   RedisBeatLock({
     this.host = 'localhost',
     this.port = 6379,
     this.options = const RedisOptions(),
-    this.prefix = 'gq',
+    this.prefix = defaultNamespace,
   });
 
   final String host;
@@ -62,6 +63,7 @@ class RedisBeatLock implements BeatLock {
 
   /// Password, TLS and database; see [RedisOptions].
   final RedisOptions options;
+  @override
   final String prefix;
 
   String get _key => '$prefix:beat:lock';
@@ -175,12 +177,12 @@ class NoopBeatStateStore implements BeatStateStore {
 
 /// Persists last-run times in a Redis hash (`<prefix>:beat:lastrun`),
 /// surviving a beat process restart.
-class RedisBeatStateStore implements BeatStateStore {
+class RedisBeatStateStore implements BeatStateStore, Namespaced {
   RedisBeatStateStore({
     this.host = 'localhost',
     this.port = 6379,
     this.options = const RedisOptions(),
-    this.prefix = 'gq',
+    this.prefix = defaultNamespace,
   });
 
   final String host;
@@ -188,6 +190,7 @@ class RedisBeatStateStore implements BeatStateStore {
 
   /// Password, TLS and database; see [RedisOptions].
   final RedisOptions options;
+  @override
   final String prefix;
 
   String get _key => '$prefix:beat:lastrun';

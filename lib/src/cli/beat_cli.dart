@@ -6,6 +6,7 @@ import '../beat/beat.dart';
 import '../beat/coordination.dart';
 import '../broker/redis_broker.dart';
 import '../logging.dart';
+import '../namespace.dart';
 import '../redis_options.dart';
 import 'cli_args.dart';
 import 'shutdown.dart';
@@ -28,7 +29,7 @@ import 'shutdown.dart';
 /// ```
 ///
 /// Recognized flags: `--redis-host=H` (default: localhost),
-/// `--redis-port=P` (default: 6379), `--prefix=P` (default: gq),
+/// `--redis-port=P` (default: 6379), `--namespace=P` (alias `--prefix`; default: gq),
 /// `--tick-interval=SECONDS` (default: 1), `--lock-ttl=SECONDS`
 /// (default: 30), `--loglevel=debug|info|warning|error` (default: info),
 /// `--help`/`-h`.
@@ -63,7 +64,8 @@ class BeatCli {
       redisHost: redis.host,
       redisPort: redis.port,
       redisOptions: redis.options,
-      prefix: args.stringOr('prefix', 'gq'),
+      prefix: args.string('namespace') ??
+          args.stringOr('prefix', defaultNamespace),
       tickInterval: Duration(seconds: args.intOr('tick-interval', 1)),
       lockTtl: Duration(seconds: args.intOr('lock-ttl', 30)),
       logLevel: _parseLogLevel(args.string('loglevel')),
@@ -77,7 +79,7 @@ gisila_queue beat CLI
 
   dart run bin/beat.dart [--redis-url=redis://:PASS@host:6379/0 |
       --redis-host=localhost --redis-port=6379]
-      [--prefix=gq] [--tick-interval=1] [--lock-ttl=30] [--loglevel=info]
+      [--namespace=gq] [--tick-interval=1] [--lock-ttl=30] [--loglevel=info]
 ''';
 
   /// Builds a Redis-backed [GisilaQueue] from the parsed flags. Only the
@@ -129,7 +131,7 @@ gisila_queue beat CLI
       await beat.stop();
     });
     stdout.writeln('beat ${beat.id} → tick=${tickInterval.inSeconds}s '
-        '(redis $redisHost:$redisPort, prefix "$prefix")');
+        '(redis $redisHost:$redisPort, namespace "$prefix")');
     await beat.run();
     await beat.app.close();
   }

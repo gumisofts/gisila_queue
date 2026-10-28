@@ -508,4 +508,78 @@ void main() {
       await app.close();
     });
   });
+
+  group('two apps on one Redis (Q-12)', skip: _skip, () {
+    late String a;
+    late String b;
+
+    setUp(() {
+      final t = DateTime.now().microsecondsSinceEpoch;
+      a = 'gq_itest_a_$t';
+      b = 'gq_itest_b_$t';
+    });
+
+    tearDown(() async {
+      await _cleanupPrefix(a);
+      await _cleanupPrefix(b);
+    });
+
+    test('each app runs only its own tasks and its own beat', () async {
+      if (!reachable) return;
+      GisilaQueue build(String ns) => GisilaQueue.redis(
+          namespace: ns,
+          host: _host,
+          port: _port,
+          logger: SilentQueueLogger());
+      final appA = build(a);
+      final appB = build(b);
+      final ranBy = <String, List<String>>{a: [], b: []};
+      // The same task name in both apps.
+      appA.task<String>('job', (ctx) async {
+        ranBy[a]!.add(ctx.id);
+        return 'from A';
+      });
+      appB.task<String>('job', (ctx) async {
+        ranBy[b]!.add(ctx.id);
+        return 'from B';
+      });
+      final workerA = appA.worker(
+          reserveTimeout: const Duration(milliseconds: 200))
+        ..run();
+      final workerB = appB.worker(
+          reserveTimeout: const Duration(milliseconds: 200))
+        ..run();
+
+      final results = await Future.wait([
+        for (var i = 0; i < 5; i++) ...[
+          appA.send<String>('job').then((r) => r.get()),
+          appB.send<String>('job').then((r) => r.get()),
+        ],
+      ]).timeout(const Duration(seconds: 10));
+      expect(results.where((r) => r == 'from A'), hasLength(5));
+      expect(results.where((r) => r == 'from B'), hasLength(5));
+
+      // Each app's beat takes its own lock, so both fire.
+      final beatA = Beat(appA, tickInterval: const Duration(milliseconds: 20))
+        ..schedule('tick', 'job', Schedule.every(const Duration(seconds: 1)));
+      final beatB = Beat(appB, tickInterval: const Duration(milliseconds: 20))
+        ..schedule('tick', 'job', Schedule.every(const Duration(seconds: 1)));
+      unawaited(beatA.run());
+      unawaited(beatB.run());
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while ((ranBy[a]!.length < 6 || ranBy[b]!.length < 6) &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await beatA.stop();
+      await beatB.stop();
+      expect(ranBy[a]!.length, greaterThanOrEqualTo(6));
+      expect(ranBy[b]!.length, greaterThanOrEqualTo(6));
+
+      await workerA.stop();
+      await workerB.stop();
+      await appA.close();
+      await appB.close();
+    });
+  });
 }

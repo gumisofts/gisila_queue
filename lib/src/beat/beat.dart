@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../app.dart';
+import '../namespace.dart';
 import 'coordination.dart';
 import 'schedule.dart';
 
@@ -45,9 +46,16 @@ class Beat {
     BeatStateStore? stateStore,
     this.lockTtl = const Duration(seconds: 30),
     String? id,
-  })  : lock = lock ?? const NoopBeatLock(),
-        stateStore = stateStore ?? const NoopBeatStateStore(),
-        id = id ?? '${_hostname()}:$pid';
+  })  : lock = lock ?? app.beatLock ?? const NoopBeatLock(),
+        stateStore =
+            stateStore ?? app.beatStateStore ?? const NoopBeatStateStore(),
+        id = id ?? '${_hostname()}:$pid' {
+    namespace = checkNamespaces({
+      'app': app.namespace,
+      'lock': this.lock,
+      'stateStore': this.stateStore,
+    });
+  }
 
   final GisilaQueue app;
 
@@ -55,13 +63,19 @@ class Beat {
   final Duration tickInterval;
 
   /// Distributed mutex held while this instance is the active scheduler.
-  /// Defaults to [NoopBeatLock] (always "leader"), matching the previous
-  /// single-instance-by-convention behaviour.
+  /// Defaults to [GisilaQueue.beatLock], else [NoopBeatLock] (always
+  /// "leader"), matching the previous single-instance-by-convention
+  /// behaviour.
   final BeatLock lock;
 
   /// Where each entry's last-fired time is persisted across restarts.
-  /// Defaults to [NoopBeatStateStore] (nothing persisted).
+  /// Defaults to [GisilaQueue.beatStateStore], else [NoopBeatStateStore]
+  /// (nothing persisted).
   final BeatStateStore stateStore;
+
+  /// The prefix shared by [app], [lock] and [stateStore], or null when none
+  /// is namespaced. The constructor throws [ArgumentError] when they differ.
+  late final String? namespace;
 
   /// How long a lock acquisition is held for before it must be renewed.
   final Duration lockTtl;
@@ -179,6 +193,9 @@ class Beat {
     if (_running) return;
     _running = true;
     app.logger.info('beat started: ${_entries.length} entries (id=$id)');
+    if (namespace == defaultNamespace) {
+      app.logger.warning(defaultNamespaceWarning('beat $id'));
+    }
     final completer = Completer<void>();
     _timer = Timer.periodic(tickInterval, (_) async {
       if (!_running) return;

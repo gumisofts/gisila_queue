@@ -15,8 +15,8 @@ import 'package:gisila_queue/gisila_rose.dart';
 ///                         (TLS); falls back to the REDIS_URL env var
 ///   `--redis-host=HOST`   Redis host (default: localhost)
 ///   `--redis-port=PORT`   Redis port (default: 6379)
-///   `--prefix=PREFIX`     Key/channel namespace, must match producers/workers
-///                         (default: gq)
+///   `--namespace=NS`      Key/channel namespace, must match producers/workers
+///                         (alias `--prefix`; default: gq)
 ///   `--host=HOST`         HTTP bind host (default: 127.0.0.1). Any other
 ///                         address needs --basic-auth while fire/revoke
 ///                         are enabled
@@ -37,7 +37,7 @@ Future<void> main(List<String> argv) async {
   final redisHost = redis.host;
   final redisPort = redis.port;
   final redisOptions = redis.options;
-  final prefix = args['prefix'] ?? 'gq';
+  final prefix = args['namespace'] ?? args['prefix'] ?? 'gq';
   final host = args['host'] ?? '127.0.0.1';
   final port = int.tryParse(args['port'] ?? '') ?? 5555;
   final withQueues = !args.containsKey('no-queues');
@@ -97,7 +97,7 @@ Future<void> main(List<String> argv) async {
   }
   final authNote = basicAuth != null ? ', basic-auth on' : '';
   stdout.writeln('GisilaRose → http://$host:$port  '
-      '(redis $redisHost:$redisPort, prefix "$prefix"$authNote)');
+      '(redis $redisHost:$redisPort, namespace "$prefix"$authNote)');
 
   // Shut down cleanly on Ctrl-C / SIGTERM.
   Future<void> shutdown(ProcessSignal _) async {
@@ -118,7 +118,7 @@ const _usage = '''
 gisila_queue:rose — observability dashboard for gisila_queue
 
   dart run gisila_queue:rose [--redis-url=URL | --redis-host=H --redis-port=P]
-      [--prefix=gq] [--host=127.0.0.1] [--port=5555]
+      [--namespace=gq] [--host=127.0.0.1] [--port=5555]
       [--basic-auth=user:pass] [--no-queues] [--no-control]
       [--allow-unauthenticated]
 

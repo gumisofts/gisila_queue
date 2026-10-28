@@ -4,6 +4,7 @@ import 'dart:collection' as collection;
 import 'package:dart_amqp/dart_amqp.dart';
 
 import '../message.dart';
+import '../namespace.dart';
 import 'broker.dart';
 
 /// Distributed [Broker] backed by RabbitMQ (AMQP 0-9-1) via `dart_amqp`.
@@ -34,14 +35,14 @@ import 'broker.dart';
 /// `dart_amqp` has no `basicGet`, so [reserve] bridges push consumers into
 /// a priority-aware in-memory inbox — higher-priority queues in the
 /// [reserve] list are drained first.
-class RabbitBroker extends Broker {
+class RabbitBroker extends Broker implements Namespaced {
   RabbitBroker({
     this.host = 'localhost',
     this.port = 5672,
     this.virtualHost = '/',
     this.username = 'guest',
     this.password = 'guest',
-    this.prefix = 'gq',
+    this.prefix = defaultNamespace,
     this.prefetchCount = 32,
   });
 
@@ -52,6 +53,7 @@ class RabbitBroker extends Broker {
   final String password;
 
   /// Namespace for exchanges and queues on a shared vhost.
+  @override
   final String prefix;
 
   /// AMQP basic.qos prefetch — how many unacked deliveries RabbitMQ may

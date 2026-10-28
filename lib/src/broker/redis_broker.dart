@@ -4,6 +4,7 @@ import 'package:redis/redis.dart';
 import 'package:uuid/uuid.dart';
 
 import '../message.dart';
+import '../namespace.dart';
 import '../redis_options.dart';
 import 'broker.dart';
 
@@ -41,12 +42,12 @@ import 'broker.dart';
 /// (so it never stalls producers) and one for everything else. Both
 /// reconnect transparently and retry once if a call fails (e.g. after a
 /// Redis restart).
-class RedisBroker extends Broker {
+class RedisBroker extends Broker implements Namespaced {
   RedisBroker({
     this.host = 'localhost',
     this.port = 6379,
     this.options = const RedisOptions(),
-    this.prefix = 'gq',
+    this.prefix = defaultNamespace,
     this.visibilityTimeout = const Duration(minutes: 5),
     this.deadLetterLimit = 10000,
   });
@@ -58,6 +59,7 @@ class RedisBroker extends Broker {
   final RedisOptions options;
 
   /// Key namespace prefix shared by every queue/scheduled key.
+  @override
   final String prefix;
 
   /// How long a reserved message may go without an [ack] or [touch] before

@@ -5,6 +5,7 @@ import '../backend/redis_backend.dart';
 import '../broker/redis_broker.dart';
 import '../control.dart';
 import '../logging.dart';
+import '../namespace.dart';
 import '../redis_options.dart';
 import '../worker/worker.dart';
 import 'cli_args.dart';
@@ -27,7 +28,7 @@ import 'shutdown.dart';
 ///
 /// Recognized flags: `--queues=a,b` (default: `default`),
 /// `--concurrency=N` (default: 1), `--redis-host=H` (default: localhost),
-/// `--redis-port=P` (default: 6379), `--prefix=P` (default: gq),
+/// `--redis-port=P` (default: 6379), `--namespace=P` (alias `--prefix`; default: gq),
 /// `--loglevel=debug|info|warning|error` (default: info),
 /// `--drain-timeout=SECONDS` (default: 30), `--help`/`-h`.
 class WorkerCli {
@@ -65,7 +66,8 @@ class WorkerCli {
       redisHost: redis.host,
       redisPort: redis.port,
       redisOptions: redis.options,
-      prefix: args.stringOr('prefix', 'gq'),
+      prefix: args.string('namespace') ??
+          args.stringOr('prefix', defaultNamespace),
       queues: args.stringList('queues') ?? const ['default'],
       concurrency: args.intOr('concurrency', 1),
       logLevel: _parseLogLevel(args.string('loglevel')),
@@ -80,7 +82,7 @@ gisila_queue worker CLI
 
   dart run bin/worker.dart [--queues=default] [--concurrency=1]
       [--redis-url=redis://:PASS@host:6379/0 | --redis-host=localhost
-       --redis-port=6379] [--prefix=gq]
+       --redis-port=6379] [--namespace=gq]
       [--loglevel=info] [--drain-timeout=30]
 ''';
 
@@ -117,7 +119,7 @@ gisila_queue worker CLI
       await worker.stop(timeout: drainTimeout);
     });
     stdout.writeln('worker ${worker.id} → queues=${queues.join(',')} '
-        'concurrency=$concurrency (redis $redisHost:$redisPort, prefix "$prefix")');
+        'concurrency=$concurrency (redis $redisHost:$redisPort, namespace "$prefix")');
     await worker.run();
     await app.close();
   }
