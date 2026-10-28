@@ -64,8 +64,8 @@ class BeatCli {
       redisHost: redis.host,
       redisPort: redis.port,
       redisOptions: redis.options,
-      prefix: args.string('namespace') ??
-          args.stringOr('prefix', defaultNamespace),
+      prefix:
+          args.string('namespace') ?? args.stringOr('prefix', defaultNamespace),
       tickInterval: Duration(seconds: args.intOr('tick-interval', 1)),
       lockTtl: Duration(seconds: args.intOr('lock-ttl', 30)),
       logLevel: _parseLogLevel(args.string('loglevel')),

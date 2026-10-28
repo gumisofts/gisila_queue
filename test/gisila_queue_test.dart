@@ -128,8 +128,7 @@ void main() {
       await worker.stop();
     });
 
-    test('unknown task is recorded as failure once requeues run out',
-        () async {
+    test('unknown task is recorded as failure once requeues run out', () async {
       final app = _app();
       final worker = app.worker(
           maxRequeues: 2, unknownTaskBackoff: const Duration(milliseconds: 1))
