@@ -80,7 +80,7 @@ reusable library.
 
 ```yaml
 dependencies:
-  gisila_queue: ^0.1.0
+  gisila_queue: ^0.2.0
 ```
 
 ## Quick start
