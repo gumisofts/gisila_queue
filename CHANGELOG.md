@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-28 (BREAKING)
 
 - `Schedule.cron('*/15 9-17 * * 1-5')`: 5-field cron schedules for Beat.
 - `send(..., dedupeKey:, dedupeFor:)`: a repeat send with the same key
